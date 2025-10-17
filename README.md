@@ -114,5 +114,4 @@ Attack         45     242  (84% recall)
 
 ---
 
-**Status**: ✅ Publication Ready (84.67% accuracy)  
 **Last Updated**: October 17, 2025
