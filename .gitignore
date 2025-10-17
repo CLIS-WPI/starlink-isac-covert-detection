@@ -1,0 +1,12 @@
+# Ignore datasets
+data/
+*.json
+# Ignore models
+*.deb
+*.run
+*.pkl
+*.pyc
+
+# Ignore logs
+logs/
+*.log
