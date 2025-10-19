@@ -34,6 +34,23 @@ from sionna.phy.channel import (
 from sionna.phy.utils import ebnodb2no, hard_decisions
 from sionna.phy.mapping import Mapper, Demapper, BinarySource
 from sionna.phy.fec.ldpc import LDPC5GEncoder, LDPC5GDecoder
+# Default covert injection amplitude (can be overridden by tests or CLI)
+covert_amp = 1.5  # Default amplitude scaling for covert injection
+
+
+def gcc_phat(x, y):
+    """GCC-PHAT cross-correlation for robust TDoA estimation."""
+    # Ensure numpy arrays
+    x = np.asarray(x)
+    y = np.asarray(y)
+    n = len(x) + len(y) - 1
+    # FFT of zero-padded signals
+    X = np.fft.rfft(x, n=n)
+    Y = np.fft.rfft(y, n=n)
+    R = X * np.conj(Y)
+    R /= (np.abs(R) + 1e-12)
+    corr = np.fft.irfft(R, n=n)
+    return corr
 
 # Try to import NTN components, which are now integrated into Sionna.
 try:
@@ -193,7 +210,7 @@ def inject_covert_channel(ofdm_frame, resource_grid, covert_rate_mbps, scs):
     covert_symbols = covert_mapper(covert_bits)  # [batch, num_covert_subcarriers]
     
     # Covert power scaling - MAXIMUM for best detectability
-    covert_power_reduction = 1.5  # +3.5dB above data signal! Attacks will be noticeably MORE powerful
+    covert_power_reduction = covert_amp  # allow external control for ablation
     covert_symbols = covert_symbols * covert_power_reduction
 
     # Select subcarrier indices (use every 4th to avoid pilots/data)
@@ -218,7 +235,13 @@ def inject_covert_channel(ofdm_frame, resource_grid, covert_rate_mbps, scs):
     for symbol_idx in symbol_indices:
         for i, subcarrier_idx in enumerate(selected_indices):
             # Use complex() to safely convert numpy array element to Python scalar
-            ofdm_frame_np[0, 0, 0, symbol_idx, subcarrier_idx] += complex(covert_symbols_np[i])
+            # ensure we extract a true Python scalar to avoid DeprecationWarning
+            val = covert_symbols_np[i]
+            try:
+                val = np.asarray(val).item()
+            except Exception:
+                pass
+            ofdm_frame_np[0, 0, 0, symbol_idx, subcarrier_idx] += complex(val)
     
     # Define emitter location
     emitter_location = (np.random.uniform(-1000, 1000), np.random.uniform(-1000, 1000), 0)
@@ -698,12 +721,27 @@ def estimate_emitter_location_tdoa(detected_sample_idx, dataset, isac_system):
         sig = entry['rx_time']
         pos = entry['position']
 
-        # Complex cross-correlation preserves phase (more accurate TDoA)
+        # Guard: skip if signals are too short
+        if len(sig) < 3 or len(ref_signal) < 3:
+            # not enough samples to correlate reliably
+            continue
+
+        # Truncate to equal length for stability (optional)
+        L = min(len(sig), len(ref_signal))
+        sig_tr = np.asarray(sig[:L])
+        ref_tr = np.asarray(ref_signal[:L])
+
+        # Choose correlation method: GCC-PHAT is more robust at low SNR
+        use_gcc_phat = False
         try:
-            corr = np.correlate(sig, np.conj(ref_signal), mode='full')
+            if use_gcc_phat:
+                corr = gcc_phat(sig_tr, ref_tr)
+            else:
+                # Complex cross-correlation preserves phase (more accurate TDoA)
+                corr = np.correlate(sig_tr, np.conj(ref_tr), mode='full')
         except Exception:
             # fall back to magnitude correlation if complex signals cause issues
-            corr = np.correlate(np.abs(sig), np.abs(ref_signal), mode='full')
+            corr = np.correlate(np.abs(sig_tr), np.abs(ref_tr), mode='full')
 
         # Use geometry-informed approximate delay (if available) to window search
         # The stored 'true_delay_samples' in dataset is a simulation aid and gives
@@ -720,8 +758,9 @@ def estimate_emitter_location_tdoa(detected_sample_idx, dataset, isac_system):
 
         # Define a search window around the approximate delay if available
         if approx_delay is not None:
-            # window in samples (±). Keep reasonably large to account for geometry errors.
-            window = 500
+            # adaptive window: limit to a fraction of corr length to avoid empty windows
+            max_window = max(10, len(corr) // 4)
+            window = min(500, max_window)
             start = max(0, center + approx_delay - window)
             end = min(len(corr), center + approx_delay + window + 1)
             corr_window = corr[start:end]
@@ -1004,9 +1043,12 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         radar_attenuation = 0.3
         tx_time_flat = tf.squeeze(tx_time_signal)
         radar_echo = tf.roll(tx_time_flat, shift=radar_delay, axis=-1) * radar_attenuation
+        # Use an independent noise power for radar echo to avoid unintended coupling
+        no_radar = ebnodb2no(tf.constant(10.0), isac_system.NUM_BITS_PER_SYMBOL, isac_system.CODERATE, isac_system.rg)
+        noise_power_radar = tf.cast(no_radar, tf.float32)
         radar_echo_noise = tf.complex(
-            tf.random.normal(tf.shape(radar_echo), stddev=tf.sqrt(noise_power/2)),
-            tf.random.normal(tf.shape(radar_echo), stddev=tf.sqrt(noise_power/2))
+            tf.random.normal(tf.shape(radar_echo), stddev=tf.sqrt(noise_power_radar/2)),
+            tf.random.normal(tf.shape(radar_echo), stddev=tf.sqrt(noise_power_radar/2))
         )
         radar_echo += radar_echo_noise
 
@@ -1112,19 +1154,20 @@ if __name__ == "__main__":
     print("\nExtracting RX signal features (contains covert data)...")
     features_rx = extract_received_signal_features(dataset)
     
-    # Ensure same number of samples
+    # Ensure same number of samples and build index map to preserve original dataset indices
     min_samples = min(len(features_spec), len(features_rx))
     features_spec = features_spec[:min_samples]
     features_rx = features_rx[:min_samples]
-    labels_filtered = np.array(dataset['labels'][:min_samples])
-    
+    labels_filtered = np.array(dataset['labels'])[:min_samples]
+    index_map = np.arange(min_samples)  # mapping from feature index -> dataset index
+
     print(f"\nFinal dataset: {len(labels_filtered)} samples")
     print(f"Spectrogram shape: {features_spec.shape}")
     print(f"RX signal features shape: {features_rx.shape}")
-    
-    # Train-test split for both feature types
-    X_spec_train, X_spec_test, X_rx_train, X_rx_test, y_train, y_test, indices_train, indices_test = train_test_split(
-        features_spec, features_rx, labels_filtered, np.arange(len(labels_filtered)), 
+
+    # Train-test split for both feature types (preserve index_map to trace back to dataset)
+    X_spec_train, X_spec_test, X_rx_train, X_rx_test, y_train, y_test, idx_train, idx_test = train_test_split(
+        features_spec, features_rx, labels_filtered, index_map,
         test_size=0.2, random_state=42)
     
     print("\nTraining the dual-input CNN detector...")
@@ -1206,6 +1249,14 @@ if __name__ == "__main__":
     
     fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
     roc_auc = auc(fpr, tpr)
+    # Also compute AUPRC (average precision)
+    try:
+        from sklearn.metrics import average_precision_score, precision_recall_curve
+        ap = average_precision_score(y_test, y_pred_proba)
+        prec, rec, thr = precision_recall_curve(y_test, y_pred_proba)
+        print(f"AUPRC (average precision): {ap:.3f}")
+    except Exception:
+        pass
 
     plt.figure()
     plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
@@ -1219,14 +1270,12 @@ if __name__ == "__main__":
     print("\nPerforming TDoA-based localization...")
     localization_errors = []
 
-    # original_indices maps filtered-dataset indices back to original dataset indices
-    original_indices = np.array([i for i, l in enumerate(dataset['labels']) if dataset['iq_samples'][i].size >= 64])
-
-    # iterate over predictions and run TDoA for correctly detected attacks
+    # Use idx_test (index_map from train_test_split) to map feature indices back to dataset indices
+    # idx_test was produced by train_test_split earlier
     for i, pred in enumerate(y_pred_class):
         if pred == 1 and y_test[i] == 1:
-            original_idx = original_indices[indices_test[i]]
-            estimated_pos, true_pos = estimate_emitter_location_tdoa(original_idx, dataset, isac_system)
+            original_idx = idx_test[i]
+            estimated_pos, true_pos = estimate_emitter_location_tdoa(int(original_idx), dataset, isac_system)
             if estimated_pos is not None and true_pos is not None:
                 error = np.linalg.norm(estimated_pos - true_pos)
                 localization_errors.append(error)
