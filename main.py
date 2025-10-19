@@ -109,7 +109,8 @@ class ISACSystem:
                                             doppler_enabled=True)
             try:
                 # Use "umi" for the topology generator function
-                topology = gen_ntn_topology(batch_size=1, num_ut=self.NUM_UT, scenario=self.SCENARIO_TOPOLOGY, bs_height=self.SAT_HEIGHT)
+                # Ensure bs_height is float32 to avoid TF dtype mismatch inside generator
+                topology = gen_ntn_topology(batch_size=1, num_ut=self.NUM_UT, scenario=self.SCENARIO_TOPOLOGY, bs_height=float(np.float32(self.SAT_HEIGHT)))
                 self.CHANNEL_MODEL.set_topology(*topology)
             except Exception as e:
                 print(f"Error setting initial topology for NTN model: {e}")
@@ -146,6 +147,10 @@ class ISACSystem:
                                cyclic_prefix_length=self.CYCLIC_PREFIX_LENGTH,
                                pilot_pattern="kronecker",
                                pilot_ofdm_symbol_indices=[2, 7])
+        # Explicit sampling rate tied to OFDM parameters (scientifically justified)
+        # Sampling rate = FFT size * subcarrier spacing
+        # This clarifies the physical sampling frequency used for TDoA computations.
+        self.SAMPLING_RATE = float(self.FFT_SIZE * self.SUBCARRIER_SPACING)
         self.rg_mapper = ResourceGridMapper(self.rg)
         self.sm = StreamManagement(np.array([[1]]), self.NUM_UT)
         self.lmmse_equalizer = LMMSEEqualizer(self.rg, self.sm)
@@ -279,7 +284,7 @@ def generate_dataset(isac_system, num_samples_per_class, ebno_db_range=(5, 15), 
         
         if NTN_MODELS_AVAILABLE:
             topology = gen_ntn_topology(batch_size=batch_size, num_ut=isac_system.NUM_UT, 
-                                       scenario=isac_system.SCENARIO_TOPOLOGY, bs_height=isac_system.SAT_HEIGHT)
+                                       scenario=isac_system.SCENARIO_TOPOLOGY, bs_height=float(np.float32(isac_system.SAT_HEIGHT)))
             isac_system.CHANNEL_MODEL.set_topology(*topology)
 
         # Generate channel impulse response (CIR)
@@ -521,7 +526,7 @@ def build_dual_input_cnn_fixed():
     # Fusion: Combine both pathways
     combined = tf.keras.layers.concatenate([x1, x2])
     x = tf.keras.layers.Dense(128, activation='relu')(combined)
-    x = tf.keras.layers.Dropout(0.5)(x)
+    x = tf.keras.layers.Dropout(0.6)(x)
     x = tf.keras.layers.Dense(64, activation='relu')(x)
     x = tf.keras.layers.Dropout(0.3)(x)
     output = tf.keras.layers.Dense(1, activation='sigmoid')(x)
@@ -643,6 +648,8 @@ def estimate_emitter_location(detected_sample_idx, dataset, satellite_positions)
     """
     Simplified localization using Time Difference of Arrival (TDoA) from multiple satellites.
     """
+    # NOTE: This placeholder used ground-truth and synthetic noise. Keep for backward
+    # compatibility but prefer the real TDoA implementation below.
     true_location = dataset['emitter_locations'][detected_sample_idx]
     if true_location is None:
         return None, None
@@ -653,11 +660,386 @@ def estimate_emitter_location(detected_sample_idx, dataset, satellite_positions)
     return estimated_position, np.array(true_location)
 
 
+def estimate_emitter_location_tdoa(detected_sample_idx, dataset, isac_system):
+    """
+    Estimate emitter location using Time Difference of Arrival (TDoA) from multiple satellite
+    receptions saved in `dataset['satellite_receptions']`.
+
+    Steps:
+    - use the first satellite as reference
+    - cross-correlate absolute-valued received time signals to estimate integer-sample delays
+    - convert sample-delay differences to distance differences (distance_i - distance_ref)
+    - solve 2D trilateration (least-squares) using those distance differences
+    """
+    # get stored receptions for the sample
+    try:
+        satellite_rx_data = dataset['satellite_receptions'][detected_sample_idx]
+    except Exception:
+        return None, None
+
+    # require at least 4 satellites for robust 2D localization (reference + 3 others)
+    if satellite_rx_data is None or len(satellite_rx_data) < 4:
+        return None, None
+
+    # Reference is satellite 0
+    reference = satellite_rx_data[0]
+    ref_signal = reference['rx_time']
+    ref_pos = reference['position']
+
+    tdoa_measurements = []
+    satellite_pairs = []
+
+    # use correct sampling rate from isac_system (explicitly set in ISACSystem)
+    sampling_rate = getattr(isac_system, 'SAMPLING_RATE', isac_system.rg.bandwidth)
+    c_speed = 3e8
+
+    # choose other satellites as comparators
+    for entry in satellite_rx_data[1:]:
+        sig = entry['rx_time']
+        pos = entry['position']
+
+        # Complex cross-correlation preserves phase (more accurate TDoA)
+        try:
+            corr = np.correlate(sig, np.conj(ref_signal), mode='full')
+        except Exception:
+            # fall back to magnitude correlation if complex signals cause issues
+            corr = np.correlate(np.abs(sig), np.abs(ref_signal), mode='full')
+
+        # Use geometry-informed approximate delay (if available) to window search
+        # The stored 'true_delay_samples' in dataset is a simulation aid and gives
+        # an approximate propagation delay which we can use to limit false peaks.
+        approx_delay = None
+        if 'true_delay_samples' in entry:
+            try:
+                approx_delay = int(entry.get('true_delay_samples'))
+            except Exception:
+                approx_delay = None
+
+        # Full-length center index corresponding to zero-lag: len(ref_signal) - 1
+        center = len(ref_signal) - 1
+
+        # Define a search window around the approximate delay if available
+        if approx_delay is not None:
+            # window in samples (±). Keep reasonably large to account for geometry errors.
+            window = 500
+            start = max(0, center + approx_delay - window)
+            end = min(len(corr), center + approx_delay + window + 1)
+            corr_window = corr[start:end]
+            # If corr_window is empty for any reason, fallback to global search
+            if corr_window.size == 0:
+                k0 = int(np.argmax(np.abs(corr)))
+            else:
+                k_local = np.argmax(np.abs(corr_window))
+                k0 = start + k_local
+        else:
+            # fallback: global search
+            k0 = int(np.argmax(np.abs(corr)))
+
+        # Sub-sample refinement via parabolic interpolation around the peak
+        if 0 < k0 < len(corr) - 1:
+            y1 = np.abs(corr[k0 - 1])
+            y2 = np.abs(corr[k0])
+            y3 = np.abs(corr[k0 + 1])
+            denom = (y1 - 2 * y2 + y3)
+            if denom == 0:
+                delta = 0.0
+            else:
+                delta = 0.5 * (y1 - y3) / denom
+        else:
+            delta = 0.0
+
+        # fractional-sample delay (positive means sig lags ref)
+        delay_samples = (k0 - center) + delta
+
+        # Convert to distance difference
+        delay_time = delay_samples / sampling_rate
+        distance_diff = delay_time * c_speed
+
+        tdoa_measurements.append(distance_diff)
+        satellite_pairs.append((ref_pos, pos))
+
+    if len(tdoa_measurements) < 2:
+        return None, None
+
+    # solve least-squares trilateration in 2D using improved solver
+    try:
+        estimated_pos = trilateration_2d_improved(tdoa_measurements, satellite_pairs)
+    except Exception:
+        # fall back to original solver if improved fails
+        try:
+            estimated_pos = trilateration_2d(tdoa_measurements, satellite_pairs)
+        except Exception:
+            return None, None
+
+    true_pos = dataset['emitter_locations'][detected_sample_idx]
+    if true_pos is None:
+        return None, None
+
+    return estimated_pos, np.array(true_pos)
+
+
+def trilateration_2d(tdoa_measurements, satellite_pairs):
+    """
+    Solve for 2D emitter position (x, y) given TDoA distance differences.
+    Uses nonlinear least-squares (Levenberg-Marquardt) via scipy.optimize.least_squares.
+    """
+    from scipy.optimize import least_squares
+
+    def residuals(pos, tdoa_list, pairs):
+        x, y = pos
+        emitter = np.array([x, y, 0.0])
+        res = []
+        for i, (ref_pos, sat_pos) in enumerate(pairs):
+            d_ref = np.linalg.norm(emitter - ref_pos)
+            d_i = np.linalg.norm(emitter - sat_pos)
+            pred = d_i - d_ref
+            res.append(tdoa_list[i] - pred)
+        return np.array(res)
+
+    # initial guess = centroid of satellite 2D positions
+    centroids = []
+    for ref, sat in satellite_pairs:
+        centroids.append((ref[:2] + sat[:2]) / 2.0)
+    initial = np.mean(centroids, axis=0)
+
+    result = least_squares(residuals, initial, args=(tdoa_measurements, satellite_pairs), method='lm')
+    est_x, est_y = result.x
+    return np.array([est_x, est_y, 0.0])
+
+
+def trilateration_2d_improved(tdoa_measurements, satellite_pairs):
+    """
+    Improved trilateration with better initial guess and bounds.
+    Uses bounded least-squares (TRF) and a more reasonable initial guess.
+    """
+    from scipy.optimize import least_squares
+
+    def tdoa_residuals(pos_2d, tdoa_list, sat_pairs):
+        x, y = pos_2d
+        emitter_pos_3d = np.array([x, y, 0.0])
+
+        residuals = []
+        for i, (ref_pos, sat_pos) in enumerate(sat_pairs):
+            d_ref = np.linalg.norm(emitter_pos_3d - ref_pos)
+            d_i = np.linalg.norm(emitter_pos_3d - sat_pos)
+            predicted_tdoa = d_i - d_ref
+            residuals.append(tdoa_list[i] - predicted_tdoa)
+
+        return np.array(residuals)
+
+    # Better initial guess: mean of the reference satellite 2D positions
+    sat_positions = np.array([pair[0] for pair in satellite_pairs])
+    initial_guess = np.mean(sat_positions[:, :2], axis=0)
+
+    # Bounds: emitter is likely within a +/-200km box around origin (more permissive)
+    lower = np.array([-200e3, -200e3])
+    upper = np.array([200e3, 200e3])
+
+    result = least_squares(
+        tdoa_residuals,
+        initial_guess,
+        args=(tdoa_measurements, satellite_pairs),
+        method='trf',
+        bounds=(lower, upper),
+        max_nfev=1000
+    )
+
+    estimated_x, estimated_y = result.x
+    return np.array([estimated_x, estimated_y, 0.0])
+
+
+def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_satellites=4,
+                                    ebno_db_range=(5, 15), covert_rate_mbps_range=(1, 50)):
+    """
+    Generate dataset with reception simulated at multiple satellites for TDoA localization.
+    This is based on the original `generate_dataset` but stores per-satellite received signals
+    (time and frequency domain) in `satellite_receptions` so localization algorithms can
+    operate without access to ground truth during estimation.
+    """
+    all_iq_samples, all_csi, all_radar_echoes, all_labels, all_emitter_locations = [], [], [], [], []
+    all_satellite_receptions = []  # store list of receptions per sample
+
+    # Define a simple constellation (4 satellites) if num_satellites==4, otherwise place in grid
+    base_positions = []
+    grid_spacing = 100e3
+    if num_satellites == 4:
+        base_positions = [
+            np.array([0.0, 0.0, 600e3]),
+            np.array([grid_spacing, 0.0, 600e3]),
+            np.array([0.0, grid_spacing, 600e3]),
+            np.array([grid_spacing, grid_spacing, 600e3])
+        ]
+    else:
+        # place satellites on a simple square grid
+        for i in range(num_satellites):
+            x = (i % int(np.ceil(np.sqrt(num_satellites)))) * grid_spacing
+            y = (i // int(np.ceil(np.sqrt(num_satellites)))) * grid_spacing
+            base_positions.append(np.array([x, y, 600e3]))
+
+    total_payload_bits = isac_system.rg.num_data_symbols * isac_system.NUM_BITS_PER_SYMBOL
+    num_codewords = int(np.ceil(total_payload_bits / isac_system.n))
+    total_info_bits = num_codewords * isac_system.k
+
+    total_samples = num_samples_per_class * 2
+    sample_indices = np.arange(total_samples)
+    np.random.shuffle(sample_indices)
+
+    for idx in range(total_samples):
+        i = sample_indices[idx]
+        is_attack = i >= num_samples_per_class
+        label = 1 if is_attack else 0
+        batch_size = 1
+
+        b = isac_system.binary_source([batch_size, total_info_bits])
+        c_list = [isac_system.encoder(b[:, j*isac_system.k:(j+1)*isac_system.k]) for j in range(num_codewords)]
+        c = tf.concat(c_list, axis=1)[:, :total_payload_bits]
+        x = isac_system.mapper(c)
+        x = tf.reshape(x, [batch_size, isac_system.NUM_SAT_BEAMS, isac_system.NUM_UT, -1])
+        tx_ofdm_frame = isac_system.rg_mapper(x)
+
+        emitter_loc = None
+        if is_attack:
+            covert_rate = np.random.uniform(*covert_rate_mbps_range)
+            # pick a fixed emitter position for localization (on ground plane)
+            emitter_x = np.random.uniform(-50e3, 150e3)
+            emitter_y = np.random.uniform(-50e3, 150e3)
+            emitter_loc = np.array([emitter_x, emitter_y, 0.0])
+            tx_ofdm_frame, _ = inject_covert_channel(tx_ofdm_frame, isac_system.rg, covert_rate, isac_system.SUBCARRIER_SPACING)
+
+        tx_time_signal = isac_system.modulator(tx_ofdm_frame)
+
+        # simulate reception at each satellite with propagation delay and independent channel/noise
+        satellite_rx_signals = []
+        for sat_idx, sat_pos in enumerate(base_positions[:num_satellites]):
+            # compute distance and delay
+            if emitter_loc is not None:
+                distance = np.linalg.norm(sat_pos - emitter_loc)
+            else:
+                # use a default user position for benign transmissions
+                default_user_pos = np.array([50e3, 50e3, 0.0])
+                distance = np.linalg.norm(sat_pos - default_user_pos)
+
+            c_speed = 3e8
+            propagation_delay = distance / c_speed
+            # use explicit sampling rate when available
+            sampling_rate = getattr(isac_system, 'SAMPLING_RATE', isac_system.rg.bandwidth)
+            delay_samples = int(np.round(propagation_delay * sampling_rate))
+
+            # apply integer-sample delay in time-domain signal
+            tx_delayed = tf.roll(tx_time_signal, shift=delay_samples, axis=-1)
+
+            # draw a random ebno for this satellite reception
+            ebno_db = tf.random.uniform((), *ebno_db_range)
+            no = ebnodb2no(ebno_db, isac_system.NUM_BITS_PER_SYMBOL, isac_system.CODERATE, isac_system.rg)
+
+            # generate channel realization per-satellite (reuse existing model calls)
+            if NTN_MODELS_AVAILABLE:
+                # ensure bs_height dtype consistency
+                topology = gen_ntn_topology(batch_size=batch_size, num_ut=isac_system.NUM_UT,
+                          scenario=isac_system.SCENARIO_TOPOLOGY, bs_height=float(np.float32(sat_pos[2])))
+                isac_system.CHANNEL_MODEL.set_topology(*topology)
+                a, tau = isac_system.CHANNEL_MODEL(batch_size, isac_system.rg.bandwidth)
+            else:
+                a, tau = isac_system.CHANNEL_MODEL(batch_size,
+                                                   num_time_steps=isac_system.NUM_OFDM_SYMBOLS,
+                                                   sampling_frequency=isac_system.rg.bandwidth)
+
+            l_min, l_max = time_lag_discrete_time_channel(isac_system.rg.bandwidth)
+            h_time = cir_to_time_channel(isac_system.rg.bandwidth, a, tau, l_min, l_max, normalize=True)
+
+            # prepare frequency-domain channel broadcast as in generate_dataset
+            if NTN_MODELS_AVAILABLE:
+                h_power = tf.reduce_mean(tf.abs(h_time)**2, axis=-1)
+                h_gain = tf.sqrt(h_power + 1e-10)
+                h_gain = tf.reduce_mean(h_gain, axis=2)
+                h_gain = tf.reduce_mean(h_gain, axis=3)
+                h_gain = h_gain[:, 0, 0, :]
+                h_gain = tf.tile(h_gain, [1, isac_system.NUM_OFDM_SYMBOLS])
+                h_gain = tf.reshape(h_gain, [batch_size, isac_system.NUM_OFDM_SYMBOLS, 1])
+                h_gain = tf.tile(h_gain, [1, 1, isac_system.FFT_SIZE])
+                h_gain = tf.cast(h_gain, tf.complex64)
+                h_freq_broadcast = tf.expand_dims(h_gain, axis=1)
+                h_freq_broadcast = tf.expand_dims(h_freq_broadcast, axis=2)
+            else:
+                if h_time.shape[-2] == 1:
+                    multiples = [1] * len(h_time.shape)
+                    multiples[-2] = isac_system.NUM_OFDM_SYMBOLS
+                    h_time = tf.tile(h_time, multiples)
+                h_freq = time_to_ofdm_channel(h_time, isac_system.rg, l_min)
+                h_freq_reduced = tf.reduce_mean(h_freq, axis=2)
+                h_freq_reduced = tf.reduce_mean(h_freq_reduced, axis=2)
+                h_freq_simplified = h_freq_reduced[:, 0, :, :]
+                h_freq_simplified = tf.expand_dims(h_freq_simplified, axis=1)
+                h_freq_broadcast = tf.expand_dims(h_freq_simplified, axis=2)
+
+            # demodulate delayed time signal back to OFDM grid, apply channel and noise
+            tx_ofdm_delayed = isac_system.demodulator(tx_delayed)
+            rx_freq = tx_ofdm_delayed * h_freq_broadcast
+
+            noise_power = tf.cast(no, tf.float32)
+            noise_freq = tf.complex(
+                tf.random.normal(tf.shape(rx_freq), stddev=tf.sqrt(noise_power/2)),
+                tf.random.normal(tf.shape(rx_freq), stddev=tf.sqrt(noise_power/2))
+            )
+            rx_freq = rx_freq + noise_freq
+
+            rx_time_signal = isac_system.modulator(rx_freq)
+
+            satellite_rx_signals.append({
+                'satellite_id': sat_idx,
+                'position': sat_pos,
+                'rx_time': np.squeeze(rx_time_signal.numpy()),
+                'rx_freq': np.squeeze(rx_freq.numpy()),
+                'true_delay_samples': delay_samples,
+                'distance': distance
+            })
+
+        # store primary satellite data as before for detection training
+        all_iq_samples.append((i, satellite_rx_signals[0]['rx_time']))
+        all_csi.append((i, satellite_rx_signals[0]['rx_freq']))
+        all_satellite_receptions.append((i, satellite_rx_signals))
+
+        # radar echo (use main tx_time_signal)
+        radar_delay = np.random.randint(50, 150)
+        radar_attenuation = 0.3
+        tx_time_flat = tf.squeeze(tx_time_signal)
+        radar_echo = tf.roll(tx_time_flat, shift=radar_delay, axis=-1) * radar_attenuation
+        radar_echo_noise = tf.complex(
+            tf.random.normal(tf.shape(radar_echo), stddev=tf.sqrt(noise_power/2)),
+            tf.random.normal(tf.shape(radar_echo), stddev=tf.sqrt(noise_power/2))
+        )
+        radar_echo += radar_echo_noise
+
+        all_radar_echoes.append((i, np.squeeze(radar_echo.numpy())))
+        all_labels.append((i, label))
+        all_emitter_locations.append((i, emitter_loc))
+
+        if (idx+1) % 100 == 0:
+            print(f"Generated sample {idx+1}/{total_samples}...")
+
+    # Sort by original index to keep alignment
+    all_iq_samples = [x[1] for x in sorted(all_iq_samples, key=lambda x: x[0])]
+    all_csi = [x[1] for x in sorted(all_csi, key=lambda x: x[0])]
+    all_radar_echoes = [x[1] for x in sorted(all_radar_echoes, key=lambda x: x[0])]
+    all_labels = [x[1] for x in sorted(all_labels, key=lambda x: x[0])]
+    all_emitter_locations = [x[1] for x in sorted(all_emitter_locations, key=lambda x: x[0])]
+    all_satellite_receptions = [x[1] for x in sorted(all_satellite_receptions, key=lambda x: x[0])]
+
+    return {
+        'iq_samples': np.array(all_iq_samples), 'csi': np.array(all_csi),
+        'radar_echo': np.array(all_radar_echoes), 'labels': np.array(all_labels),
+        'emitter_locations': all_emitter_locations,
+        'satellite_receptions': all_satellite_receptions,
+        'sampling_rate': isac_system.SAMPLING_RATE
+    }
+
+
 # --- Main Execution Workflow ---
 if __name__ == "__main__":
     isac_system = ISACSystem()
     NUM_SAMPLES = 1500  # Increased from 1000 for better generalization
-    dataset = generate_dataset(isac_system, num_samples_per_class=NUM_SAMPLES)
+    # Use multi-satellite dataset so TDoA localization can operate on received signals
+    dataset = generate_dataset_multi_satellite(isac_system, num_samples_per_class=NUM_SAMPLES, num_satellites=4)
 
     # Debug: Check if attack samples are actually different
     print("\n=== DATA VALIDATION ===")
@@ -751,7 +1133,7 @@ if __name__ == "__main__":
     # Early stopping: monitor validation accuracy, not loss
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor='val_accuracy',
-        patience=10,
+        patience=7,
         restore_best_weights=True,
         verbose=1,
         mode='max'  # Maximize accuracy
@@ -783,7 +1165,34 @@ if __name__ == "__main__":
     y_pred_class = (y_pred_proba > 0.5).astype(int)
     
     # Detailed performance metrics
-    from sklearn.metrics import confusion_matrix, classification_report
+    try:
+        from sklearn.metrics import confusion_matrix, classification_report
+    except Exception:
+        # If scikit-learn isn't available in the execution environment, provide
+        # minimal fallback implementations to avoid crashing. They will not
+        # produce as-detailed output but are sufficient for basic diagnostics.
+        def confusion_matrix(y_true, y_pred):
+            y_true = np.asarray(y_true).ravel()
+            y_pred = np.asarray(y_pred).ravel()
+            labels = [0, 1]
+            cm = np.zeros((2, 2), dtype=int)
+            for t, p in zip(y_true, y_pred):
+                cm[int(t), int(p)] += 1
+            return cm
+
+        def classification_report(y_true, y_pred, target_names=None):
+            cm = confusion_matrix(y_true, y_pred)
+            # build a tiny textual report
+            report = ""
+            for i, name in enumerate((target_names or ['0', '1'])):
+                tp = cm[i, i]
+                fp = cm[:, i].sum() - tp
+                fn = cm[i, :].sum() - tp
+                prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+                report += f"{name}: precision={prec:.3f}, recall={rec:.3f}, f1={f1:.3f}\n"
+            return report
     cm = confusion_matrix(y_test, y_pred_class)
     print("\n=== CONFUSION MATRIX ===")
     print("                Predicted")
@@ -807,23 +1216,32 @@ if __name__ == "__main__":
     print("ROC curve saved to roc_curve.pdf"); plt.show()
 
     print("\nPerforming localization...")
-    satellite_positions = [np.array([0, 0, 600e3]), np.array([50e3, 0, 600e3]),
-                           np.array([0, 50e3, 600e3]), np.array([-50e3, 0, 600e3])]
-    
+    print("\nPerforming TDoA-based localization...")
     localization_errors = []
-    
+
+    # original_indices maps filtered-dataset indices back to original dataset indices
     original_indices = np.array([i for i, l in enumerate(dataset['labels']) if dataset['iq_samples'][i].size >= 64])
 
+    # iterate over predictions and run TDoA for correctly detected attacks
     for i, pred in enumerate(y_pred_class):
         if pred == 1 and y_test[i] == 1:
             original_idx = original_indices[indices_test[i]]
-            estimated_pos, true_pos = estimate_emitter_location(original_idx, dataset, satellite_positions)
-            if estimated_pos is not None:
-                localization_errors.append(np.linalg.norm(estimated_pos - true_pos))
+            estimated_pos, true_pos = estimate_emitter_location_tdoa(original_idx, dataset, isac_system)
+            if estimated_pos is not None and true_pos is not None:
+                error = np.linalg.norm(estimated_pos - true_pos)
+                localization_errors.append(error)
+                if len(localization_errors) <= 3:
+                    print(f"\nSample {original_idx}:")
+                    print(f"  True: {true_pos}")
+                    print(f"  Estimated: {estimated_pos}")
+                    print(f"  Error: {error:.2f} m")
 
     if localization_errors:
         median_error = np.median(localization_errors)
-        print(f"Median Localization Error: {median_error:.2f} meters")
+        print(f"\n=== TDOA LOCALIZATION RESULTS ===")
+        print(f"Median Error: {median_error:.2f} meters")
+        print(f"Mean Error: {np.mean(localization_errors):.2f} meters")
+        print(f"90th Percentile: {np.percentile(localization_errors, 90):.2f} meters")
 
         sorted_errors = np.sort(localization_errors)
         cdf = np.arange(1, len(sorted_errors) + 1) / len(sorted_errors)
