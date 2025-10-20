@@ -6,3 +6,4 @@ pandas
 # Matplotlib is used for plotting the results
 matplotlib
 scipy
+seaborn
