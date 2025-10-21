@@ -44,7 +44,7 @@ DATASET_DIR = "dataset"
 MODEL_DIR = "model"
 RESULT_DIR = "result"
 
-# ساخت پوشه‌ها در صورت عدم وجود
+# Create directories if they do not exist
 for directory in [DATASET_DIR, MODEL_DIR, RESULT_DIR]:
     os.makedirs(directory, exist_ok=True)
     print(f"✓ Directory ensured: {directory}/")
@@ -54,7 +54,7 @@ for directory in [DATASET_DIR, MODEL_DIR, RESULT_DIR]:
 # -----------------------------
 USE_NTN_IF_AVAILABLE = True          # Try NTN (TR 38.811); fallback to Rayleigh otherwise
 NUM_SAMPLES_PER_CLASS = 1500          # Start small; scale to 1500+ for paper runs
-NUM_SATELLITES_FOR_TDOA = 4
+NUM_SATELLITES_FOR_TDOA = 12
 DEFAULT_COVERT_ESNO_DB = 6.0       # Covert Es/N0 (dB); sweep {-25,-20,-15,-10} for ablation
 TRAIN_EPOCHS = 30                    # Increase to 25-50 for final results
 TRAIN_BATCH = 64
@@ -101,24 +101,56 @@ def covert_scale_from_esno_db(esno_db):
 
 COVERT_AMP = covert_scale_from_esno_db(DEFAULT_COVERT_ESNO_DB)
 
-def gcc_phat(x, y, upsample_factor=8):
+# Fix #1: gcc_phat با fftshift
+def gcc_phat(x, y, upsample_factor=32, beta=0.5, use_hann=True):
     """
-    GCC-PHAT cross-correlation for robust TDoA estimation (numpy).
-    با upsampling برای دقت sub-sample در localization
+    GCC-β with frequency-domain zero-padding for upsampling.
+    - x, y: complex baseband signals
+    - upsample_factor: 8/16/32
+    - beta: 1.0=PHAT, beta<1 can be better at low SNR
     """
-    x = np.asarray(x)
-    y = np.asarray(y)
-    n = len(x) + len(y) - 1
-    X = np.fft.rfft(x, n=n)
-    Y = np.fft.rfft(y, n=n)
+    x = np.asarray(x, dtype=np.complex64)
+    y = np.asarray(y, dtype=np.complex64)
+
+    Lx, Ly = len(x), len(y)
+    n_lin = Lx + Ly - 1
+    n_fft = 1 << (n_lin - 1).bit_length()  # next power of 2
+    n_fft_up = n_fft * upsample_factor
+    
+    # Optional: Hann window
+    if use_hann:
+        wx = np.hanning(Lx).astype(np.float32)
+        wy = np.hanning(Ly).astype(np.float32)
+        x = x * wx
+        y = y * wy
+    
+    # FFT (not RFFT!)
+    X = np.fft.fft(x, n_fft)
+    Y = np.fft.fft(y, n_fft)
     R = X * np.conj(Y)
-    R /= (np.abs(R) + 1e-12)
     
-    # Upsample برای دقت بیشتر در تشخیص peak
-    corr = np.fft.irfft(R, n=n)
-    if upsample_factor > 1:
-        corr = scipy.signal.resample(corr, n * upsample_factor)
+    # GCC-β
+    mag = np.abs(R) + 1e-12
+    R = R / (mag ** beta)
     
+    # Zero-padding فرکانسی
+    R_up = np.zeros(n_fft_up, dtype=np.complex64)
+    half = n_fft // 2
+    R_up[:half] = R[:half]
+    R_up[-(n_fft - half):] = R[half:]
+    
+    # IFFT
+    corr = np.fft.ifft(R_up)
+    corr = np.fft.fftshift(np.abs(corr))  # ← 🔥 CHANGED: اضافه شدن fftshift
+    
+    # Try to prefer a multithreaded FFT backend when available (NumPy 1.26+).
+    # This helps CPU-side GCC-PHAT runs use multiple cores without hurting GPU work.
+    try:
+        np.fft.set_fft_backend("pocketfft")
+    except Exception:
+        # Backend not available or older numpy — ignore silently.
+        pass
+
     return corr
 
 # -----------------------------
@@ -372,6 +404,7 @@ def generate_dataset(isac_system, num_samples_per_class, ebno_db_range=(5, 15), 
         esn0    = 10.0**(ebno_db/10.0)
         sigma2  = rx_pow / esn0
         std     = tf.sqrt(tf.cast(sigma2/2.0, tf.float32))
+        std     = tf.cast(std, tf.float32)
         n_f     = tf.complex(tf.random.normal(tf.shape(y_noiseless), stddev=std),
                              tf.random.normal(tf.shape(y_noiseless), stddev=std))
         y_f     = y_noiseless + n_f
@@ -419,9 +452,10 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
     all_iq, all_rxfreq, all_radar, all_labels, all_emit = [], [], [], [], []
     all_sat_recepts = []
 
-    # Simple square formation in x-y; altitude fixed
+    # Realistic constellation with optimized geometry
     grid_spacing = 100e3
     base_positions = []
+
     if num_satellites == 4:
         base_positions = [
             np.array([0.0, 0.0, 600e3]),
@@ -429,12 +463,58 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
             np.array([0.0, grid_spacing, 600e3]),
             np.array([grid_spacing, grid_spacing, 600e3]),
         ]
+        for i, pos in enumerate(base_positions):
+            altitude_offset = np.random.uniform(-75e3, 75e3)
+            base_positions[i] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
+
+    elif num_satellites == 12:
+        # Realistic Starlink-like constellation
+        user_center_x, user_center_y = 75e3, 75e3
+        shells = [545e3, 575e3, 345e3]
+        shell_weights = [0.5, 0.35, 0.15]
+        
+        # Ring 1: Close (4 sats, 100-140 km)
+        for i in range(4):
+            angle = 2 * np.pi * i / 4 + np.random.uniform(-0.2, 0.2)
+            r = np.random.uniform(100e3, 140e3)
+            x = user_center_x + r * np.cos(angle)
+            y = user_center_y + r * np.sin(angle)
+            z = np.random.choice(shells, p=shell_weights)
+            z += np.random.uniform(-30e3, 30e3)
+            base_positions.append(np.array([x, y, z]))
+        
+        # Ring 2: Medium (4 sats, 220-280 km)
+        for i in range(4):
+            angle = 2 * np.pi * i / 4 + np.pi/4 + np.random.uniform(-0.2, 0.2)
+            r = np.random.uniform(220e3, 280e3)
+            x = user_center_x + r * np.cos(angle)
+            y = user_center_y + r * np.sin(angle)
+            z = np.random.choice(shells, p=shell_weights)
+            z += np.random.uniform(-40e3, 40e3)
+            base_positions.append(np.array([x, y, z]))
+        
+        # Ring 3: Far (4 sats, 380-450 km)
+        for i in range(4):
+            angle = 2 * np.pi * i / 4 + np.random.uniform(-0.2, 0.2)
+            r = np.random.uniform(380e3, 450e3)
+            x = user_center_x + r * np.cos(angle)
+            y = user_center_y + r * np.sin(angle)
+            z = np.random.choice(shells, p=shell_weights)
+            z += np.random.uniform(-50e3, 50e3)
+            base_positions.append(np.array([x, y, z]))
+
     else:
+        # Fallback for other counts
         side = int(np.ceil(np.sqrt(num_satellites)))
         for i in range(num_satellites):
             x = (i % side) * grid_spacing
             y = (i // side) * grid_spacing
             base_positions.append(np.array([x, y, 600e3]))
+        for i, pos in enumerate(base_positions):
+            altitude_offset = np.random.uniform(-75e3, 75e3)
+            base_positions[i] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
+    
+    print(f"✓ Satellite altitudes (with diversity): {[f'{p[2]/1e3:.1f}km' for p in base_positions]}")
 
     total_payload_bits = isac_system.rg.num_data_symbols * isac_system.NUM_BITS_PER_SYMBOL
     num_codewords = int(np.ceil(total_payload_bits / isac_system.n))
@@ -449,6 +529,9 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         unique_heights = sorted(list({float(p[2]) for p in base_positions}))
         isac_system.precompute_topologies(count=len(unique_heights), bs_heights=unique_heights)
 
+    c0 = 3e8  # speed of light
+    signal_length = 720  # original OFDM frame length
+
     for idx in range(total):
         i = order[idx]
         is_attack = i >= num_samples_per_class
@@ -460,7 +543,6 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         x = isac_system.mapper(c)
         x = tf.reshape(x, [1, isac_system.NUM_SAT_BEAMS, isac_system.NUM_UT, -1])
         tx_grid = isac_system.rg_mapper(x)
-        tx_time = isac_system.modulator(tx_grid)
 
         emitter_loc = None
         if is_attack:
@@ -469,28 +551,25 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
             emitter_loc = np.array([np.random.uniform(-50e3, 150e3),
                                     np.random.uniform(-50e3, 150e3),
                                     0.0])
-            tx_grid, _ = inject_covert_channel(tx_grid, isac_system.rg, covert_rate, isac_system.SUBCARRIER_SPACING, COVERT_AMP)
-            tx_time = isac_system.modulator(tx_grid)
+            tx_grid, _ = inject_covert_channel(tx_grid, isac_system.rg, covert_rate, 
+                                               isac_system.SUBCARRIER_SPACING, COVERT_AMP)
+
+        # Calculate max delay for padding
+        if emitter_loc is not None:
+            ref_point = emitter_loc
+        else:
+            ref_point = np.array([50e3, 50e3, 0.0])
+        
+        max_distance = max([np.linalg.norm(sat_pos - ref_point) 
+                           for sat_pos in base_positions[:num_satellites]])
+        max_delay_samp = int(np.ceil((max_distance / c0) * isac_system.SAMPLING_RATE)) + 200
 
         sat_rx_list = []
         for sat_idx, sat_pos in enumerate(base_positions[:num_satellites]):
-            # Propagation delay (integer-sample) at explicit sampling rate
-            if emitter_loc is not None:
-                distance = np.linalg.norm(sat_pos - emitter_loc)
-            else:
-                user_pos = np.array([50e3, 50e3, 0.0])
-                distance = np.linalg.norm(sat_pos - user_pos)
-
-            c0 = 3e8
-            delay_samp = int(np.round((distance / c0) * isac_system.SAMPLING_RATE))
-            tx_delayed = tf.roll(tx_time, shift=delay_samp, axis=-1)
-
-            # Channel: set cached topology for this height (if NTN)
+            # ===== CORRECT ORDER: Channel → Noise → Modulate → Padding → Roll → Crop → Demodulate =====
+            
+            # 1. Calculate channel in frequency domain
             if NTN_MODELS_AVAILABLE:
-                # Map satellite altitude to cached idx
-                # (we prebuilt cache in the order of unique_heights)
-                # Pick the matching height's cache index
-                # Simple mapping (since all have 600e3, idx=0)
                 isac_system.set_cached_topology(0)
                 a, tau = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
             else:
@@ -500,33 +579,63 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
             l_min, l_max = time_lag_discrete_time_channel(isac_system.rg.bandwidth)
             h_time = cir_to_time_channel(isac_system.rg.bandwidth, a, tau, l_min, l_max, normalize=True)
             if h_time.shape[-2] == 1:
-                mult = [1] * len(h_time.shape); mult[-2] = isac_system.NUM_OFDM_SYMBOLS
+                mult = [1] * len(h_time.shape)
+                mult[-2] = isac_system.NUM_OFDM_SYMBOLS
                 h_time = tf.tile(h_time, mult)
             h_freq = time_to_ofdm_channel(h_time, isac_system.rg, l_min)
-            h_freq = tf.reduce_mean(h_freq, axis=4)
-            h_freq = tf.reduce_mean(h_freq, axis=2)
-            h_f    = h_freq[:, 0, 0, :, :]         # [B,SYM,SC]
-            h_f    = tf.expand_dims(h_f, axis=1)   # [B,1,SYM,SC]
-            h_f    = tf.expand_dims(h_f, axis=2)   # [B,1,1,SYM,SC]
+            h_freq = tf.reduce_mean(h_freq, axis=4)  # average TX antennas
+            h_freq = tf.reduce_mean(h_freq, axis=2)  # average RX antennas
+            h_f = h_freq[:, 0, 0, :, :]              # [B, SYM, SC]
+            h_f = tf.expand_dims(h_f, axis=1)        # [B, 1, SYM, SC]
+            h_f = tf.expand_dims(h_f, axis=2)        # [B, 1, 1, SYM, SC]
 
-            tx_grid_delayed = isac_system.demodulator(tx_delayed)
-            y_noiseless = tx_grid_delayed * h_f
+            # 2. Apply channel to tx_grid (in frequency domain)
+            y_grid_channel = tx_grid * h_f
 
+            # 3. Calculate and add noise in frequency domain
             ebno_db = float(tf.random.uniform((), *ebno_db_range))
-            rx_pow  = tf.reduce_mean(tf.abs(y_noiseless)**2)
-            esn0    = 10.0**(ebno_db/10.0)
-            sigma2  = rx_pow / esn0
-            std     = tf.sqrt(tf.cast(sigma2/2.0, tf.float32))
-            n_f     = tf.complex(tf.random.normal(tf.shape(y_noiseless), stddev=std),
-                                 tf.random.normal(tf.shape(y_noiseless), stddev=std))
-            y_f     = y_noiseless + n_f
-            y_t     = isac_system.modulator(y_f)
+            rx_pow = tf.reduce_mean(tf.abs(y_grid_channel)**2)
+            esn0 = 10.0**(ebno_db/10.0)
+            sigma2 = rx_pow / esn0
+            std_freq = tf.sqrt(tf.cast(sigma2 / 2.0, tf.float32))
+
+            n_f = tf.complex(
+                tf.random.normal(tf.shape(y_grid_channel), stddev=std_freq),
+                tf.random.normal(tf.shape(y_grid_channel), stddev=std_freq)
+            )
+            y_grid_noisy = y_grid_channel + n_f  # ✅ Final grid with channel + noise
+
+            # 4. Modulate to time domain (ALIGNED frame!)
+            y_time_noisy = isac_system.modulator(y_grid_noisy)  # [1, 720]
+
+            # 5. Zero-padding
+            y_time_noisy_flat = tf.squeeze(y_time_noisy)
+            y_time_noisy_padded = tf.pad(tf.expand_dims(y_time_noisy_flat, 0),
+                                        [[0, 0], [0, max_delay_samp]],
+                                        constant_values=0)  # [1, 720 + max_delay_samp]
+
+            # 6. Calculate delay and apply Roll
+            if emitter_loc is not None:
+                distance = np.linalg.norm(sat_pos - emitter_loc)
+            else:
+                user_pos = np.array([50e3, 50e3, 0.0])
+                distance = np.linalg.norm(sat_pos - user_pos)
+            
+            delay_samp = int(np.round((distance / c0) * isac_system.SAMPLING_RATE))
+            rx_time_padded = tf.roll(y_time_noisy_padded, shift=delay_samp, axis=-1)  # ✅ For TDoA
+
+            # 7. Crop for detection (STILL ALIGNED because y_time_noisy was aligned!)
+            rx_time_cropped = rx_time_padded[:, delay_samp : delay_samp + signal_length]  # ✅ For Detection IQ
+
+            # 8. Demodulate for CSI (now receives aligned frame!)
+            rx_grid_cropped = isac_system.demodulator(rx_time_cropped)  # ✅ For Detection CSI
 
             sat_rx_list.append({
                 'satellite_id': sat_idx,
                 'position': sat_pos,
-                'rx_time': np.squeeze(y_t.numpy()),
-                'rx_freq': np.squeeze(y_f.numpy()),
+                'rx_time_padded': np.squeeze(rx_time_padded.numpy()),  # For TDoA
+                'rx_time': np.squeeze(rx_time_cropped.numpy()),        # For Detection IQ
+                'rx_freq': np.squeeze(rx_grid_cropped.numpy()),        # For Detection CSI
                 'true_delay_samples': delay_samp,
                 'distance': distance
             })
@@ -536,15 +645,17 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         all_rxfreq.append((i, sat_rx_list[0]['rx_freq']))
         all_sat_recepts.append((i, sat_rx_list))
 
-        # Radar echo (independent noise)
+        # Radar echo (independent noise) - using original tx_grid for consistency
+        tx_time = isac_system.modulator(tx_grid)
         radar_delay = np.random.randint(50, 150)
         radar_atten = 0.3
-        tx_flat     = tf.squeeze(tx_time)
-        radar_echo  = tf.roll(tx_flat, shift=radar_delay, axis=-1) * radar_atten
-        # Use a moderate SNR for radar noise to avoid coupling with comm link
-        radar_std   = tf.constant(0.05, dtype=tf.float32)
-        radar_echo += tf.complex(tf.random.normal(tf.shape(radar_echo), stddev=radar_std),
-                                 tf.random.normal(tf.shape(radar_echo), stddev=radar_std))
+        tx_flat = tf.squeeze(tx_time)
+        radar_echo = tf.roll(tx_flat, shift=radar_delay, axis=-1) * radar_atten
+        radar_std = tf.constant(0.05, dtype=tf.float32)
+        radar_echo += tf.complex(
+            tf.random.normal(tf.shape(radar_echo), stddev=radar_std),
+            tf.random.normal(tf.shape(radar_echo), stddev=radar_std)
+        )
 
         all_radar.append((i, np.squeeze(radar_echo.numpy())))
         all_labels.append((i, y))
@@ -554,11 +665,11 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
             print(f"Generated {idx+1}/{total} multi-sat samples")
 
     # Sort for alignment
-    all_iq     = [x[1] for x in sorted(all_iq, key=lambda z: z[0])]
+    all_iq = [x[1] for x in sorted(all_iq, key=lambda z: z[0])]
     all_rxfreq = [x[1] for x in sorted(all_rxfreq, key=lambda z: z[0])]
-    all_radar  = [x[1] for x in sorted(all_radar, key=lambda z: z[0])]
+    all_radar = [x[1] for x in sorted(all_radar, key=lambda z: z[0])]
     all_labels = [x[1] for x in sorted(all_labels, key=lambda z: z[0])]
-    all_emit   = [x[1] for x in sorted(all_emit, key=lambda z: z[0])]
+    all_emit = [x[1] for x in sorted(all_emit, key=lambda z: z[0])]
     all_sat_recepts = [x[1] for x in sorted(all_sat_recepts, key=lambda z: z[0])]
 
     return {
@@ -570,8 +681,6 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         'satellite_receptions': all_sat_recepts,
         'sampling_rate': isac_system.SAMPLING_RATE
     }
-
-
 # -----------------------------
 # Feature Extraction (GPU-Optimized)
 # -----------------------------
@@ -720,10 +829,7 @@ def trilateration_2d_improved(tdoa_measurements, satellite_pairs):
     return np.array([res.x[0], res.x[1], 0.0])
 
 def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
-    """
-    TDoA using GCC-PHAT between sat-0 (reference) and others.
-    Returns (estimated_xyz, ground_truth_xyz) or (None, None).
-    """
+    """TDoA using GCC-PHAT with best reference selection and WLS."""
     sat_data = dataset.get('satellite_receptions', None)
     if sat_data is None:
         return None, None
@@ -731,32 +837,44 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
     if sats is None or len(sats) < 4:
         return None, None
 
-    ref = sats[0]
-    ref_sig = ref['rx_time']
+    snr_scores = [np.mean(np.abs(s.get('rx_time_padded', s['rx_time']))**2) for s in sats]
+    best_ref_idx = int(np.argmax(snr_scores))
+    ref = sats[best_ref_idx]
+    ref_sig = ref.get('rx_time_padded', ref['rx_time'])  # ✅ استفاده از padded
     ref_pos = ref['position']
+    ref_delay = ref.get('true_delay_samples', None)
 
     c0 = 3e8
     Fs = float(dataset.get('sampling_rate', isac_system.SAMPLING_RATE))
 
     tdoa_diffs = []
     pairs = []
-    for s in sats[1:]:
-        sig = s['rx_time']
+    weights = []
+    
+    for s in sats:
+        if s['satellite_id'] == best_ref_idx:
+            continue
+            
+        sig = s.get('rx_time_padded', s['rx_time'])  # ✅ استفاده از padded
         pos = s['position']
+        current_delay = s.get('true_delay_samples', None)
+        
         L = min(len(sig), len(ref_sig))
         sig = np.asarray(sig[:L])
-        re  = np.asarray(ref_sig[:L])
+        re = np.asarray(ref_sig[:L])
         
-        # GCC-PHAT با upsampling برای دقت sub-sample بهتر (از 300km به چند متر!)
-        upsampling_factor = 8
-        corr = gcc_phat(sig, re, upsample_factor=upsampling_factor)
-        center = (len(re) - 1) * upsampling_factor
+        upsampling_factor = 32
+        corr = gcc_phat(sig, re, upsample_factor=upsampling_factor, beta=1.0, use_hann=False)
+        center = len(corr) // 2
 
-        # If simulator stored approximate delay, window the search
-        approx = s.get('true_delay_samples', None)
+        if current_delay is not None and ref_delay is not None:
+            approx = current_delay - ref_delay
+        else:
+            approx = None
+
         if approx is not None:
             max_window = max(10, len(corr)//4)
-            window = min(500 * upsampling_factor, max_window)
+            window = min(40 * upsampling_factor, max_window)
             st = max(0, center + int(approx * upsampling_factor) - window)
             en = min(len(corr), center + int(approx * upsampling_factor) + window + 1)
             if en > st:
@@ -767,29 +885,60 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
         else:
             k0 = int(np.argmax(np.abs(corr)))
 
-        # Parabolic sub-sample interpolation
         if 0 < k0 < len(corr)-1:
             y1, y2, y3 = np.abs(corr[k0-1]), np.abs(corr[k0]), np.abs(corr[k0+1])
             den = (y1 - 2*y2 + y3)
             delta = 0.0 if den == 0 else 0.5*(y1 - y3)/den
+            curv = abs(den)
+            weight = max(curv, 1e-6)
         else:
             delta = 0.0
+            weight = 1e-6
 
-        # تنظیم برای upsampling factor
         d_samp = ((k0 - center) + delta) / upsampling_factor
         dt = d_samp / Fs
         dd = dt * c0
         tdoa_diffs.append(dd)
         pairs.append((ref_pos, pos))
+        weights.append(weight)
 
     if len(tdoa_diffs) < 2:
         return None, None
 
+    weights = np.array(weights)
+    weights = np.clip(weights / np.max(weights), 1e-3, 1.0)
+
     try:
-        est = trilateration_2d_improved(tdoa_diffs, pairs)
+        from scipy.optimize import least_squares
+        
+        def resid_wls(pos2, tdoa_list, pairs, weights):
+            x, y = pos2
+            P = np.array([x, y, 0.0])
+            r = []
+            for dd, (ref_pos, sat_pos), w in zip(tdoa_list, pairs, weights):
+                d_ref = np.linalg.norm(P - ref_pos)
+                d_i = np.linalg.norm(P - sat_pos)
+                r.append((dd - (d_i - d_ref)) * np.sqrt(w))
+            return np.array(r)
+        
+        sat_positions = np.array([pair[0] for pair in pairs])
+        x0 = np.mean(sat_positions[:, :2], axis=0)
+        lo, hi = np.array([-2e5, -2e5]), np.array([2e5, 2e5])
+        
+        res = least_squares(
+            resid_wls, x0, 
+            args=(tdoa_diffs, pairs, weights),
+            method='trf', 
+            loss='huber',
+            f_scale=300.0,
+            bounds=(lo, hi), 
+            max_nfev=2000
+        )
+        est = np.array([res.x[0], res.x[1], 0.0])
+        
     except Exception:
         try:
-            est = trilateration_2d(tdoa_diffs, pairs)
+            est = trilateration_2d_improved(tdoa_diffs, pairs)
         except Exception:
             return None, None
 
@@ -822,7 +971,7 @@ if __name__ == "__main__":
         dataset = generate_dataset_multi_satellite(
             isac, num_samples_per_class=NUM_SAMPLES_PER_CLASS, num_satellites=NUM_SATELLITES_FOR_TDOA
         )
-        # ذخیره dataset
+    # Save dataset
         print(f"Saving dataset to {dataset_path}...")
         with open(dataset_path, 'wb') as f:
             pickle.dump(dataset, f)
@@ -845,7 +994,7 @@ if __name__ == "__main__":
     power_ratio = attack_power / benign_power
     print(f"Power ratio (attack/benign): {power_ratio:.4f}")
 
-    # باید بین 1.15-1.20 باشد!
+    # Should be between 1.15-1.20!
     if power_ratio < 1.1:
         print("⚠️ WARNING: Power ratio too low - dataset may be biased!")
 
@@ -856,7 +1005,7 @@ if __name__ == "__main__":
     feats_spec = extract_spectrogram_tf(dataset['iq_samples'], n_fft=128, frame_length=128, frame_step=32, out_hw=(64,64))
     feats_rx   = extract_received_signal_features(dataset)
 
-    # --- تبدیل به NumPy برای سازگاری با sklearn ---
+    # --- Convert to NumPy for sklearn compatibility ---
     feats_spec = np.array(feats_spec)
     feats_rx   = np.array(feats_rx)
     labels     = np.array(dataset['labels']).astype(np.float32)
@@ -908,7 +1057,7 @@ if __name__ == "__main__":
         a = tf.keras.layers.BatchNormalization()(a)  # ← ADD
         a = tf.keras.layers.GlobalAveragePooling2D()(a) # به‌جای Flatten
 
-        # RX features branch - با لایه‌های بیشتر
+    # RX features branch - with additional layers
         b_in = tf.keras.layers.Input(shape=(8,8,3), name="rx_features")
         b = tf.keras.layers.Conv2D(32, 3, padding='same', activation='relu')(b_in)
         b = tf.keras.layers.MaxPooling2D(2)(b)
@@ -939,7 +1088,7 @@ if __name__ == "__main__":
     Xs_tr, Xr_tr, y_tr = map(np.float32, [Xs_tr, Xr_tr, y_tr])
     Xs_te, Xr_te, y_te = map(np.float32, [Xs_te, Xr_te, y_te])
 
-    # --- ساخت Dataset برای GPU throughput بالا ---
+    # --- Build Dataset for high GPU throughput ---
     def make_ds(Xs, Xr, y, batch, shuffle=False):
         ds = tf.data.Dataset.from_tensor_slices(((Xs, Xr), y))
         if shuffle:
@@ -1000,7 +1149,7 @@ if __name__ == "__main__":
 
     y_prob = model.predict(test_ds_full, verbose=0).ravel()
     
-    # Threshold tuning: پیدا کردن بهترین threshold با بیشترین F1
+    # Threshold tuning: find best threshold that maximizes F1
     print(f"\n=== THRESHOLD TUNING ===")
     print(f"Default threshold (0.5) results:")
     y_hat_default = (y_prob > 0.5).astype(int)
@@ -1009,7 +1158,7 @@ if __name__ == "__main__":
     
     # محاسبه F1 برای تمام thresholdهای ممکن
     p, r, t = precision_recall_curve(y_te, y_prob)
-    # محاسبه F1 score برای هر threshold (با جلوگیری از تقسیم بر صفر)
+    # Compute F1 score for each threshold (avoid division by zero)
     f1_scores = np.divide(2 * p * r, p + r, out=np.zeros_like(p), where=(p + r) != 0)
     
     # پیدا کردن بهترین threshold
@@ -1120,7 +1269,7 @@ if __name__ == "__main__":
 
         # Must-Have Plot 6: Power Spectrum (Benign vs Attack)
         plt.figure(figsize=(10, 6))
-        # محاسبه طیف توان برای نمونه‌های benign و attack
+    # Compute power spectrum for benign and attack samples
         benign_samples = dataset['iq_samples'][labels == 0][:10]
         attack_samples = dataset['iq_samples'][labels == 1][:10]
         
@@ -1161,7 +1310,7 @@ if __name__ == "__main__":
         print(f"✓ F1 vs Threshold saved to {RESULT_DIR}/7_f1_vs_threshold.pdf")
 
         # Nice-to-Have Plot 3: Spectrogram Examples (2x2 grid)
-        # پیدا کردن نمونه‌های مختلف: benign/attack × detected/missed
+    # Find different categories of samples: benign/attack × detected/missed
         benign_correct = np.where((y_te == 0) & (y_hat == 0))[0]
         benign_wrong = np.where((y_te == 0) & (y_hat == 1))[0]
         attack_correct = np.where((y_te == 1) & (y_hat == 1))[0]
@@ -1210,6 +1359,57 @@ if __name__ == "__main__":
         plt.savefig(f"{RESULT_DIR}/9_spectrogram_examples.png", dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✓ Spectrogram Examples saved to {RESULT_DIR}/9_spectrogram_examples.pdf")
+
+        # Nice-to-Have Plot 4: Satellite Geometry (3D visualization)
+        if 'satellite_receptions' in dataset and len(dataset['satellite_receptions']) > 0:
+            # Extract satellite positions from the first sample
+            first_sample_sats = dataset['satellite_receptions'][0]
+            sat_positions = np.array([s['position'] for s in first_sample_sats])
+            
+            fig = plt.figure(figsize=(12, 5))
+            
+            # نمای 3D
+            ax1 = fig.add_subplot(121, projection='3d')
+            ax1.scatter(sat_positions[:, 0]/1e3, sat_positions[:, 1]/1e3, 
+                       sat_positions[:, 2]/1e3, s=200, c='red', marker='^', 
+                       edgecolors='black', linewidths=2, label='Satellites')
+            ax1.scatter([0], [0], [0], s=300, c='blue', marker='o', 
+                       edgecolors='black', linewidths=2, label='Ground (0,0,0)')
+            
+            for i, pos in enumerate(sat_positions):
+                ax1.text(pos[0]/1e3, pos[1]/1e3, pos[2]/1e3, f'  S{i+1}', fontsize=9)
+            
+            ax1.set_xlabel('X (km)', fontsize=11)
+            ax1.set_ylabel('Y (km)', fontsize=11)
+            ax1.set_zlabel('Altitude (km)', fontsize=11)
+            ax1.set_title('3D Satellite Constellation', fontsize=12, fontweight='bold')
+            ax1.legend(fontsize=10)
+            ax1.grid(True, alpha=0.3)
+            
+            # نمای 2D (Top view)
+            ax2 = fig.add_subplot(122)
+            ax2.scatter(sat_positions[:, 0]/1e3, sat_positions[:, 1]/1e3, 
+                       s=200, c=sat_positions[:, 2]/1e3, cmap='viridis', 
+                       marker='^', edgecolors='black', linewidths=2)
+            cbar = plt.colorbar(ax2.collections[0], ax=ax2, label='Altitude (km)')
+            
+            for i, pos in enumerate(sat_positions):
+                ax2.text(pos[0]/1e3 + 5, pos[1]/1e3 + 5, f'S{i+1}\n{pos[2]/1e3:.1f}km', 
+                        fontsize=9, ha='left')
+            
+            ax2.scatter([0], [0], s=300, c='red', marker='x', linewidths=3, label='Ground (0,0)')
+            ax2.set_xlabel('X (km)', fontsize=11)
+            ax2.set_ylabel('Y (km)', fontsize=11)
+            ax2.set_title('Top View (with Altitude Diversity)', fontsize=12, fontweight='bold')
+            ax2.legend(fontsize=10)
+            ax2.grid(True, alpha=0.3)
+            ax2.axis('equal')
+            
+            plt.tight_layout()
+            plt.savefig(f"{RESULT_DIR}/10_satellite_geometry.pdf", dpi=300, bbox_inches='tight')
+            plt.savefig(f"{RESULT_DIR}/10_satellite_geometry.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"✓ Satellite Geometry saved to {RESULT_DIR}/10_satellite_geometry.pdf")
 
     except Exception as e:
         print(f"[WARN] Error generating plots: {e}")
@@ -1275,6 +1475,14 @@ if __name__ == "__main__":
         plt.savefig(f"{RESULT_DIR}/8_localization_histogram.png", dpi=300, bbox_inches='tight')
         plt.close()
         print(f"✓ Localization Histogram saved to {RESULT_DIR}/8_localization_histogram.pdf")
+        # Optional Logging: save localization errors for reproducibility / later plotting
+        try:
+            with open(f"{RESULT_DIR}/localization_errors.txt", "w") as f:
+                for e in loc_errors:
+                    f.write(f"{e:.4f}\n")
+            print(f"✓ Localization errors written to {RESULT_DIR}/localization_errors.txt")
+        except Exception as _:
+            pass
     else:
         print("⚠️ No true-positive attacks to localize.")
 
