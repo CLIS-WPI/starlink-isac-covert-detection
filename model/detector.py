@@ -273,6 +273,9 @@ def evaluate_detector(model, Xs_te, Xr_te, y_te, temperature=1.0):
     # Get logits
     test_logits = model.predict(test_ds, verbose=0)
     
+    # ✅ FIX: Flatten logits to match y_te shape
+    test_logits = test_logits.ravel()  # Convert (474, 1) to (474,)
+    
     # ✅ Apply temperature scaling
     calibrated_logits = test_logits / temperature
     y_prob_calibrated = tf.nn.sigmoid(calibrated_logits).numpy().ravel()
