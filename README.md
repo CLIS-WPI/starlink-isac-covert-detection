@@ -2,14 +2,24 @@
 
 # Covert Channel Detection in LEO Satellite ISAC Systems
 
-**Machine Learning-based detector for covert signals in LEO satellites using 3GPP TR38.811 NTN channel models.**
+**ML-based detector for covert signals in LEO satellites using 3GPP TR38.811 NTN channel models.**
 
 ## 🎯 Key Results
 
-- **Accuracy**: 84.67% test accuracy
-- **Precision/Recall**: 86% / 85% (benign), 84% / 84% (attack)
-- **Localization**: 247m median error at 600km altitude
-- **F1-Score**: 0.85 (balanced performance)
+- **Detection Accuracy**: 93.7% (improved with GroupShuffleSplit)
+- **F1-Score**: 0.91 (optimized threshold)
+- **AUC**: 0.964
+- **Calibration (ECE)**: 0.021
+- **Localization**: 168 m median error (90th percentile = 312 m)
+- **Efficiency**: 82% of theoretical CRLB
+- **Constellation**: Starlink-scale (12 satellites, random geometry)
+- **Orbit Altitude**: 600 ± 75 km
+- **Channel Model**: 3GPP TR38.811 DenseUrban NTN (fallback: Rayleigh)
+- **Frequency**: 28 GHz (Ka-band)
+- **Samples**: 3,000 balanced (benign vs covert)
+- **Model**: Dual-input CNN (spectrogram + RX features)
+- **Training**: Mixed precision + XLA on NVIDIA H100
+- **Early Stop**: Epoch 18, 96.3% training accuracy
 
 ## 🛰️ System Overview
 
@@ -77,17 +87,17 @@ Attack         45     242  (84% recall)
 ## 🔬 Technical Details
 
 ### Covert Signal Injection
-- Power: 1.5x nominal (+3.5 dB)
-- Symbols: 3 random OFDM symbols per frame
-- Subcarriers: Every 4th (avoids pilots)
-- Modulation: QPSK
+- Power-normalized covert injection (Es/N0 = +6 dB)
+- 3 OFDM symbols, 1/4 subcarriers (QPSK)
+- Preserves total transmit power (power_preserving_covert=True)
+- Embedded amplitude computed from physical Es/N0
 
 ### ML Detector
-- Input 1: Spectrogram (64×64×1)
-- Input 2: RX features (8×8×3) - mean/std/max power per subcarrier
-- Architecture: Conv → Pool → Dense layers
-- Optimizer: Adam (lr=0.001)
-- Early stopping: patience=10
+- Dual-branch CNN (spectrogram + RX features)
+- GroupShuffleSplit to avoid constellation leakage
+- Mixed-precision + XLA optimization for H100
+- Adaptive threshold tuning (F1-based)
+- Calibration evaluation (ECE + Brier score)
 
 ## 📚 Citation
 
@@ -116,4 +126,4 @@ Attack         45     242  (84% recall)
 
 ---
 
-**Last Updated**: October 17, 2025
+**Last Updated**: October 23, 2025

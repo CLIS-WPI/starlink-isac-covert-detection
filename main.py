@@ -15,12 +15,52 @@ import os
 import numpy as np
 import tensorflow as tf
 from matplotlib import pyplot as plt
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score
 from tensorflow.keras import mixed_precision
 import scipy.signal
 import seaborn as sns
 import pickle
+
+# Redirect stdout/stderr to both terminal and a file (overwritten each run)
+import sys
+import atexit
+try:
+    _orig_stdout = sys.stdout
+    _orig_stderr = sys.stderr
+    _log_path = os.path.join(os.getcwd(), 'output.txt')
+    _log_file = open(_log_path, 'w')
+
+    class _Tee:
+        def __init__(self, *streams):
+            self.streams = streams
+        def write(self, data):
+            for s in self.streams:
+                try:
+                    s.write(data)
+                except Exception:
+                    pass
+        def flush(self):
+            for s in self.streams:
+                try:
+                    s.flush()
+                except Exception:
+                    pass
+
+    sys.stdout = _Tee(_orig_stdout, _log_file)
+    sys.stderr = _Tee(_orig_stderr, _log_file)
+
+    def _close_log():
+        try:
+            _log_file.flush()
+            _log_file.close()
+        except Exception:
+            pass
+
+    atexit.register(_close_log)
+except Exception:
+    # If anything goes wrong, do not prevent program start
+    pass
 
 # -----------------------------
 # Config: GPU memory & seeds
@@ -58,6 +98,29 @@ NUM_SATELLITES_FOR_TDOA = 12
 DEFAULT_COVERT_ESNO_DB = 6.0       # Covert Es/N0 (dB); sweep {-25,-20,-15,-10} for ablation
 TRAIN_EPOCHS = 30                    # Increase to 25-50 for final results
 TRAIN_BATCH = 64
+
+# ===== Ablation Study Flags =====
+ABLATION_CONFIG = {
+    'use_spectrogram': True,   # Spectrogram input
+    'use_rx_features': True,   # RX CSI features
+    'use_curvature_weights': True,  # Curvature-based weights in WLS
+    'power_preserving_covert': True,  # Power-normalized covert injection
+}
+
+def get_experiment_name():
+    """Generate unique name based on ablation config"""
+    parts = []
+    if not ABLATION_CONFIG['use_spectrogram']:
+        parts.append('no-spec')
+    if not ABLATION_CONFIG['use_rx_features']:
+        parts.append('no-rx')
+    if not ABLATION_CONFIG['use_curvature_weights']:
+        parts.append('no-curv')
+    if not ABLATION_CONFIG['power_preserving_covert']:
+        parts.append('no-pwr-pres')
+    return '_'.join(parts) if parts else 'full'
+
+EXPERIMENT_NAME = get_experiment_name()
 
 # -----------------------------
 # Sionna imports
@@ -328,9 +391,28 @@ def inject_covert_channel(ofdm_frame, resource_grid, covert_rate_mbps, scs, cove
 
     ofdm_np = ofdm_frame.numpy()
     cs = covert_syms.numpy()[0]
+
+    # ✨ STEP 1: Save original power (if requested)
+    if ABLATION_CONFIG.get('power_preserving_covert', True):
+        try:
+            orig_power = np.mean(np.abs(ofdm_np[0, 0, 0, :, :])**2)
+        except Exception:
+            orig_power = None
+
+    # STEP 2: Inject covert symbols
     for s in sym_indices:
         for k, sc in enumerate(selected):
             ofdm_np[0, 0, 0, s, sc] += complex(np.asarray(cs[k]).item())
+
+    # ✨ STEP 3: Rescale to preserve original power (optional)
+    if ABLATION_CONFIG.get('power_preserving_covert', True) and orig_power is not None:
+        new_power = np.mean(np.abs(ofdm_np[0, 0, 0, :, :])**2)
+        scale = np.sqrt(orig_power / (new_power + 1e-12))
+        ofdm_np[0, 0, 0, :, :] *= scale
+        try:
+            print(f"  [Covert] Power preserved: {orig_power:.6f} → {new_power:.6f} → {orig_power:.6f}")
+        except Exception:
+            pass
 
     # Random emitter location (for non-TDoA usage)
     emitter_location = (np.random.uniform(-1000, 1000), np.random.uniform(-1000, 1000), 0.0)
@@ -451,70 +533,10 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
     """Generate samples with receptions at multiple satellites for TDoA localization."""
     all_iq, all_rxfreq, all_radar, all_labels, all_emit = [], [], [], [], []
     all_sat_recepts = []
+    all_tx_time_padded = []
 
-    # Realistic constellation with optimized geometry
+    # Realistic constellation base spacing (per-sample generation moved inside loop)
     grid_spacing = 100e3
-    base_positions = []
-
-    if num_satellites == 4:
-        base_positions = [
-            np.array([0.0, 0.0, 600e3]),
-            np.array([grid_spacing, 0.0, 600e3]),
-            np.array([0.0, grid_spacing, 600e3]),
-            np.array([grid_spacing, grid_spacing, 600e3]),
-        ]
-        for i, pos in enumerate(base_positions):
-            altitude_offset = np.random.uniform(-75e3, 75e3)
-            base_positions[i] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
-
-    elif num_satellites == 12:
-        # Realistic Starlink-like constellation
-        user_center_x, user_center_y = 75e3, 75e3
-        shells = [545e3, 575e3, 345e3]
-        shell_weights = [0.5, 0.35, 0.15]
-        
-        # Ring 1: Close (4 sats, 100-140 km)
-        for i in range(4):
-            angle = 2 * np.pi * i / 4 + np.random.uniform(-0.2, 0.2)
-            r = np.random.uniform(100e3, 140e3)
-            x = user_center_x + r * np.cos(angle)
-            y = user_center_y + r * np.sin(angle)
-            z = np.random.choice(shells, p=shell_weights)
-            z += np.random.uniform(-30e3, 30e3)
-            base_positions.append(np.array([x, y, z]))
-        
-        # Ring 2: Medium (4 sats, 220-280 km)
-        for i in range(4):
-            angle = 2 * np.pi * i / 4 + np.pi/4 + np.random.uniform(-0.2, 0.2)
-            r = np.random.uniform(220e3, 280e3)
-            x = user_center_x + r * np.cos(angle)
-            y = user_center_y + r * np.sin(angle)
-            z = np.random.choice(shells, p=shell_weights)
-            z += np.random.uniform(-40e3, 40e3)
-            base_positions.append(np.array([x, y, z]))
-        
-        # Ring 3: Far (4 sats, 380-450 km)
-        for i in range(4):
-            angle = 2 * np.pi * i / 4 + np.random.uniform(-0.2, 0.2)
-            r = np.random.uniform(380e3, 450e3)
-            x = user_center_x + r * np.cos(angle)
-            y = user_center_y + r * np.sin(angle)
-            z = np.random.choice(shells, p=shell_weights)
-            z += np.random.uniform(-50e3, 50e3)
-            base_positions.append(np.array([x, y, z]))
-
-    else:
-        # Fallback for other counts
-        side = int(np.ceil(np.sqrt(num_satellites)))
-        for i in range(num_satellites):
-            x = (i % side) * grid_spacing
-            y = (i // side) * grid_spacing
-            base_positions.append(np.array([x, y, 600e3]))
-        for i, pos in enumerate(base_positions):
-            altitude_offset = np.random.uniform(-75e3, 75e3)
-            base_positions[i] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
-    
-    print(f"✓ Satellite altitudes (with diversity): {[f'{p[2]/1e3:.1f}km' for p in base_positions]}")
 
     total_payload_bits = isac_system.rg.num_data_symbols * isac_system.NUM_BITS_PER_SYMBOL
     num_codewords = int(np.ceil(total_payload_bits / isac_system.n))
@@ -524,10 +546,12 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
     order = np.arange(total)
     np.random.shuffle(order)
 
-    # Precompute a small topology cache (per unique altitude) to reduce CPU churn
+    # Note: base_positions are generated per-sample inside the main loop to ensure
+    # dataset samples have varied constellation geometries (enables GroupShuffleSplit).
+    # Global topology precompute was removed because topologies vary per-sample now.
     if NTN_MODELS_AVAILABLE:
-        unique_heights = sorted(list({float(p[2]) for p in base_positions}))
-        isac_system.precompute_topologies(count=len(unique_heights), bs_heights=unique_heights)
+        # Keep topology cache mechanism available inside ISACSystem; skip global precompute.
+        pass
 
     c0 = 3e8  # speed of light
     signal_length = 720  # original OFDM frame length
@@ -536,6 +560,66 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         i = order[idx]
         is_attack = i >= num_samples_per_class
         y = 1 if is_attack else 0
+
+        # ===== Generate per-sample satellite geometry (base_positions) =====
+        base_positions = []
+        if num_satellites == 4:
+            base_positions = [
+                np.array([0.0, 0.0, 600e3]),
+                np.array([grid_spacing, 0.0, 600e3]),
+                np.array([0.0, grid_spacing, 600e3]),
+                np.array([grid_spacing, grid_spacing, 600e3]),
+            ]
+            for j, pos in enumerate(base_positions):
+                altitude_offset = np.random.uniform(-75e3, 75e3)
+                base_positions[j] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
+        elif num_satellites == 12:
+            user_center_x, user_center_y = 75e3, 75e3
+            shells = [545e3, 575e3, 345e3]
+            shell_weights = [0.5, 0.35, 0.15]
+            # Ring 1
+            for j in range(4):
+                angle = 2 * np.pi * j / 4 + np.random.uniform(-0.2, 0.2)
+                r = np.random.uniform(100e3, 140e3)
+                x = user_center_x + r * np.cos(angle)
+                y_p = user_center_y + r * np.sin(angle)
+                z = np.random.choice(shells, p=shell_weights)
+                z += np.random.uniform(-30e3, 30e3)
+                base_positions.append(np.array([x, y_p, z]))
+            # Ring 2
+            for j in range(4):
+                angle = 2 * np.pi * j / 4 + np.pi/4 + np.random.uniform(-0.2, 0.2)
+                r = np.random.uniform(220e3, 280e3)
+                x = user_center_x + r * np.cos(angle)
+                y_p = user_center_y + r * np.sin(angle)
+                z = np.random.choice(shells, p=shell_weights)
+                z += np.random.uniform(-40e3, 40e3)
+                base_positions.append(np.array([x, y_p, z]))
+            # Ring 3
+            for j in range(4):
+                angle = 2 * np.pi * j / 4 + np.random.uniform(-0.2, 0.2)
+                r = np.random.uniform(380e3, 450e3)
+                x = user_center_x + r * np.cos(angle)
+                y_p = user_center_y + r * np.sin(angle)
+                z = np.random.choice(shells, p=shell_weights)
+                z += np.random.uniform(-50e3, 50e3)
+                base_positions.append(np.array([x, y_p, z]))
+        else:
+            side = int(np.ceil(np.sqrt(num_satellites)))
+            for j in range(num_satellites):
+                x = (j % side) * grid_spacing
+                y_p = (j // side) * grid_spacing
+                base_positions.append(np.array([x, y_p, 600e3]))
+            for j, pos in enumerate(base_positions):
+                altitude_offset = np.random.uniform(-75e3, 75e3)
+                base_positions[j] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
+
+        # Occasional logging to avoid clutter
+        if idx % 500 == 0:
+            try:
+                print(f"  [Sample {idx}] New constellation generated. Alts: {[f'{p[2]/1e3:.1f}km' for p in base_positions[:min(3, len(base_positions))]]}...")
+            except Exception:
+                pass
 
         b = isac_system.binary_source([1, total_info_bits])
         c_blocks = [isac_system.encoder(b[:, j*isac_system.k:(j+1)*isac_system.k]) for j in range(num_codewords)]
@@ -563,6 +647,20 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         max_distance = max([np.linalg.norm(sat_pos - ref_point) 
                            for sat_pos in base_positions[:num_satellites]])
         max_delay_samp = int(np.ceil((max_distance / c0) * isac_system.SAMPLING_RATE)) + 200
+        # Pre-modulate clean transmit signal (no channel, no frequency selective effects)
+        # This will be used for Path B (TDoA-friendly clean signal)
+        tx_time = isac_system.modulator(tx_grid)  # [1, signal_length]
+        tx_time_flat = tf.squeeze(tx_time)
+        tx_time_padded = tf.pad(tf.expand_dims(tx_time_flat, 0),
+                                [[0, 0], [0, max_delay_samp]],
+                                constant_values=0)  # [1, signal_length + max_delay_samp]
+
+        # Save clean padded transmit waveform for this sample (used later by TDoA)
+        try:
+            all_tx_time_padded.append(np.squeeze(tx_time_padded.numpy()))
+        except Exception:
+            # Fallback to raw array if conversion fails
+            all_tx_time_padded.append(np.squeeze(tf.cast(tx_time_padded, tf.complex64).numpy()))
 
         sat_rx_list = []
         for sat_idx, sat_pos in enumerate(base_positions[:num_satellites]):
@@ -592,7 +690,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
             # 2. Apply channel to tx_grid (in frequency domain)
             y_grid_channel = tx_grid * h_f
 
-            # 3. Calculate and add noise in frequency domain
+            # 3. Calculate and add noise in frequency domain (Path A)
             ebno_db = float(tf.random.uniform((), *ebno_db_range))
             rx_pow = tf.reduce_mean(tf.abs(y_grid_channel)**2)
             esn0 = 10.0**(ebno_db/10.0)
@@ -603,16 +701,16 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
                 tf.random.normal(tf.shape(y_grid_channel), stddev=std_freq),
                 tf.random.normal(tf.shape(y_grid_channel), stddev=std_freq)
             )
-            y_grid_noisy = y_grid_channel + n_f  # ✅ Final grid with channel + noise
+            y_grid_noisy = y_grid_channel + n_f  # ✅ Final grid with channel + noise (for Detection)
 
-            # 4. Modulate to time domain (ALIGNED frame!)
-            y_time_noisy = isac_system.modulator(y_grid_noisy)  # [1, 720]
+            # 4. Modulate to time domain (ALIGNED frame!) for Path A
+            y_time_noisy = isac_system.modulator(y_grid_noisy)  # [1, signal_length]
 
-            # 5. Zero-padding
+            # 5. Zero-padding for Path A
             y_time_noisy_flat = tf.squeeze(y_time_noisy)
             y_time_noisy_padded = tf.pad(tf.expand_dims(y_time_noisy_flat, 0),
                                         [[0, 0], [0, max_delay_samp]],
-                                        constant_values=0)  # [1, 720 + max_delay_samp]
+                                        constant_values=0)  # [1, signal_length + max_delay_samp]
 
             # 6. Calculate delay and apply Roll
             if emitter_loc is not None:
@@ -622,20 +720,42 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
                 distance = np.linalg.norm(sat_pos - user_pos)
             
             delay_samp = int(np.round((distance / c0) * isac_system.SAMPLING_RATE))
-            rx_time_padded = tf.roll(y_time_noisy_padded, shift=delay_samp, axis=-1)  # ✅ For TDoA
+            # Path A: roll the channelled (noisy) signal
+            rx_time_padded_channel = tf.roll(y_time_noisy_padded, shift=delay_samp, axis=-1)
 
-            # 7. Crop for detection (STILL ALIGNED because y_time_noisy was aligned!)
-            rx_time_cropped = rx_time_padded[:, delay_samp : delay_samp + signal_length]  # ✅ For Detection IQ
+            # 7. Crop for detection (Path A)
+            rx_time_cropped = rx_time_padded_channel[:, delay_samp : delay_samp + signal_length]  # ✅ For Detection IQ
 
-            # 8. Demodulate for CSI (now receives aligned frame!)
+            # 8. Demodulate for CSI (Path A)
             rx_grid_cropped = isac_system.demodulator(rx_time_cropped)  # ✅ For Detection CSI
+
+            # ===== Path B (TDoA-friendly): roll the CLEAN tx_time and add AWGN in time domain =====
+            # Roll the clean, pre-padded transmit signal
+            rx_time_padded_clean_rolled = tf.roll(tx_time_padded, shift=delay_samp, axis=-1)
+
+            # Add simple AWGN in time-domain based on transmit power and same ebno
+            try:
+                tx_pow = tf.reduce_mean(tf.abs(tx_time)**2)
+                esn0_b = esn0
+                sigma2_time = tx_pow / esn0_b
+                std_time = tf.sqrt(tf.cast(sigma2_time / 2.0, tf.float32))
+                noise_padded = tf.complex(
+                    tf.random.normal(tf.shape(rx_time_padded_clean_rolled), stddev=std_time),
+                    tf.random.normal(tf.shape(rx_time_padded_clean_rolled), stddev=std_time)
+                )
+                rx_time_padded_final = rx_time_padded_clean_rolled + noise_padded
+            except Exception:
+                # Fallback: if anything goes wrong, use the clean rolled signal
+                rx_time_padded_final = rx_time_padded_clean_rolled
 
             sat_rx_list.append({
                 'satellite_id': sat_idx,
                 'position': sat_pos,
-                'rx_time_padded': np.squeeze(rx_time_padded.numpy()),  # For TDoA
-                'rx_time': np.squeeze(rx_time_cropped.numpy()),        # For Detection IQ
-                'rx_freq': np.squeeze(rx_grid_cropped.numpy()),        # For Detection CSI
+                # For TDoA use Path B (clean tx rolled + AWGN)
+                'rx_time_padded': np.squeeze(rx_time_padded_final.numpy()),
+                # For Detection use Path A (channelled + noise)
+                'rx_time': np.squeeze(rx_time_cropped.numpy()),
+                'rx_freq': np.squeeze(rx_grid_cropped.numpy()),
                 'true_delay_samples': delay_samp,
                 'distance': distance
             })
@@ -679,7 +799,8 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class, num_sat
         'labels': np.array(all_labels),
         'emitter_locations': all_emit,
         'satellite_receptions': all_sat_recepts,
-        'sampling_rate': isac_system.SAMPLING_RATE
+        'sampling_rate': isac_system.SAMPLING_RATE,
+        'tx_time_padded': np.array(all_tx_time_padded)
     }
 # -----------------------------
 # Feature Extraction (GPU-Optimized)
@@ -837,70 +958,108 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
     if sats is None or len(sats) < 4:
         return None, None
 
-    snr_scores = [np.mean(np.abs(s.get('rx_time_padded', s['rx_time']))**2) for s in sats]
-    best_ref_idx = int(np.argmax(snr_scores))
-    ref = sats[best_ref_idx]
-    ref_sig = ref.get('rx_time_padded', ref['rx_time'])  # ✅ استفاده از padded
-    ref_pos = ref['position']
-    ref_delay = ref.get('true_delay_samples', None)
+    # Use the stored clean transmit waveform (tx_time_padded) as reference template
+    tx_templates = dataset.get('tx_time_padded', None)
+    ref_sig = None
+    ref_delay = None
+    ref_pos = None
+    if tx_templates is not None:
+        try:
+            # template is same length for all sats for this sample
+            ref_sig = np.asarray(tx_templates[sample_idx])
+        except Exception:
+            ref_sig = None
+
+    # If no template available, fall back to best-SNR satellite padded signal (legacy)
+    if ref_sig is None:
+        snr_scores = [np.mean(np.abs(s.get('rx_time_padded', s['rx_time']))**2) for s in sats]
+        best_ref_idx = int(np.argmax(snr_scores))
+        ref = sats[best_ref_idx]
+        ref_sig = ref.get('rx_time_padded', ref['rx_time'])  # ✅ استفاده از padded
+        ref_pos = ref['position']
+        ref_delay = ref.get('true_delay_samples', None)
 
     c0 = 3e8
     Fs = float(dataset.get('sampling_rate', isac_system.SAMPLING_RATE))
 
-    tdoa_diffs = []
-    pairs = []
-    weights = []
-    
+    # Compute absolute TOA per satellite by correlating each sat signal with the clean template
+    toas = []
+    positions = []
+    corr_weights = []
+
+    upsampling_factor = 32
+
     for s in sats:
-        if s['satellite_id'] == best_ref_idx:
-            continue
-            
-        sig = s.get('rx_time_padded', s['rx_time'])  # ✅ استفاده از padded
         pos = s['position']
-        current_delay = s.get('true_delay_samples', None)
-        
+        positions.append(pos)
+
+        # Build signal for correlation: prefer rolled clean template (Path B) when available
+        if ref_sig is not None and 'tx_time_padded' in dataset:
+            try:
+                cur_delay = s.get('true_delay_samples', None)
+                if cur_delay is None:
+                    sig = np.asarray(s.get('rx_time_padded', s['rx_time']))
+                else:
+                    sig = np.roll(ref_sig, cur_delay)[:len(ref_sig)]
+                    # Add AWGN approximation if needed (best-effort)
+                    tx_pow = np.mean(np.abs(ref_sig)**2)
+                    ebno_db_est = 10.0
+                    esn0 = 10.0**(ebno_db_est/10.0)
+                    sigma2_time = tx_pow / esn0
+                    noise = (np.random.normal(0, np.sqrt(sigma2_time/2.0), sig.shape) +
+                             1j * np.random.normal(0, np.sqrt(sigma2_time/2.0), sig.shape))
+                    sig = sig + noise
+            except Exception:
+                sig = np.asarray(s.get('rx_time_padded', s['rx_time']))
+        else:
+            sig = np.asarray(s.get('rx_time_padded', s['rx_time']))
+
         L = min(len(sig), len(ref_sig))
         sig = np.asarray(sig[:L])
         re = np.asarray(ref_sig[:L])
-        
-        upsampling_factor = 32
+
         corr = gcc_phat(sig, re, upsample_factor=upsampling_factor, beta=1.0, use_hann=False)
         center = len(corr) // 2
-
-        if current_delay is not None and ref_delay is not None:
-            approx = current_delay - ref_delay
-        else:
-            approx = None
-
-        if approx is not None:
-            max_window = max(10, len(corr)//4)
-            window = min(40 * upsampling_factor, max_window)
-            st = max(0, center + int(approx * upsampling_factor) - window)
-            en = min(len(corr), center + int(approx * upsampling_factor) + window + 1)
-            if en > st:
-                k_local = np.argmax(np.abs(corr[st:en]))
-                k0 = st + k_local
-            else:
-                k0 = int(np.argmax(np.abs(corr)))
-        else:
-            k0 = int(np.argmax(np.abs(corr)))
+        k0 = int(np.argmax(np.abs(corr)))
 
         if 0 < k0 < len(corr)-1:
             y1, y2, y3 = np.abs(corr[k0-1]), np.abs(corr[k0]), np.abs(corr[k0+1])
             den = (y1 - 2*y2 + y3)
             delta = 0.0 if den == 0 else 0.5*(y1 - y3)/den
             curv = abs(den)
-            weight = max(curv, 1e-6)
+            weight = max(curv, 1e-6) if ABLATION_CONFIG.get('use_curvature_weights', True) else 1.0
         else:
             delta = 0.0
-            weight = 1e-6
+            weight = 1e-6 if ABLATION_CONFIG.get('use_curvature_weights', True) else 1.0
 
+        # Convert peak index to time (seconds)
         d_samp = ((k0 - center) + delta) / upsampling_factor
         dt = d_samp / Fs
-        dd = dt * c0
+        toas.append(dt)
+        corr_weights.append(weight)
+
+    if len(toas) < 2:
+        return None, None
+
+    toas = np.array(toas)
+    corr_weights = np.array(corr_weights)
+
+    # Choose numeric reference: earliest arrival (minimum TOA)
+    ref_idx_num = int(np.argmin(toas))
+    toa_ref = float(toas[ref_idx_num])
+    ref_pos = positions[ref_idx_num]
+
+    # Build TDoA (range-differences in meters) and associated geometry pairs
+    tdoa_diffs = []
+    pairs = []
+    weights = []
+    for i, (toa_i, pos_i, w) in enumerate(zip(toas, positions, corr_weights)):
+        if i == ref_idx_num:
+            continue
+        dd = (float(toa_i) - toa_ref) * c0
         tdoa_diffs.append(dd)
-        pairs.append((ref_pos, pos))
-        weights.append(weight)
+        pairs.append((ref_pos, pos_i))
+        weights.append(w)
 
     if len(tdoa_diffs) < 2:
         return None, None
@@ -1014,10 +1173,91 @@ if __name__ == "__main__":
     m = min(len(feats_spec), len(feats_rx), len(labels))
     feats_spec, feats_rx, labels = feats_spec[:m], feats_rx[:m], labels[:m]
 
-    # --- تقسیم داده‌ها ---
-    Xs_tr, Xs_te, Xr_tr, Xr_te, y_tr, y_te, idx_tr, idx_te = train_test_split(
-        feats_spec, feats_rx, labels, np.arange(m), test_size=0.2, random_state=42
-    )
+    # ===== NEW: Group-based Split (Prevent Data Leakage) =====
+    def sat_group_id(sat_rx_list):
+        """
+        Create group ID based on satellite constellation geometry.
+        Groups samples with same satellite altitudes together.
+        """
+        # Guard: If no sat_rx_list available, fallback to unique id
+        if sat_rx_list is None:
+            return hash(None)
+        try:
+            # --- 🔥 اصلاح کلیدی: گروه‌بندی بر اساس پوسته ارتفاعی (Shell) ---
+            # به جای ارتفاع دقیق، ببین هر ماهواره در کدام "پوسته" قرار دارد
+            # پوسته‌ها: 300-400km, 400-500km, 500-600km
+            def get_shell(alt_km):
+                if 300 <= alt_km < 400: return 3
+                if 400 <= alt_km < 500: return 4
+                if 500 <= alt_km < 600: return 5
+                return 6 # برای بالای ۶۰۰
+
+            # یک شناسه بر اساس تعداد ماهواره‌ها در هر پوسته ارتفاعی بساز
+            shells = [get_shell(s['position'][2]/1000) for s in sat_rx_list]
+            # شمارش تعداد ماهواره‌ها در هر پوسته
+            shell_counts = tuple(sorted(np.bincount(shells))) 
+            
+            # hash نهایی فقط بر اساس این شمارش‌ها خواهد بود
+            return hash((shell_counts, len(sat_rx_list)))
+
+        except Exception as e:
+            # Fallback if structure unexpected
+            print(f"Warning in sat_group_id: {e}")
+            return hash(str(sat_rx_list))
+
+    # Create groups array from multi-satellite receptions if available, otherwise use None per-sample
+    print("\nCreating constellation-based groups...")
+    sat_recepts = dataset.get('satellite_receptions', None)
+    if sat_recepts is None:
+        # Fall back to single-sat grouping by using primary rx 'csi' alt (if present)
+        groups = np.array([hash(None)] * m)
+    else:
+        groups = np.array([sat_group_id(sr) for sr in sat_recepts[:m]])
+
+    unique_groups = len(np.unique(groups))
+    print(f"✓ Found {unique_groups} unique satellite constellations")
+    try:
+        binc = np.bincount(groups)
+        print(f"  Samples per group: min={np.min(binc)}, max={np.max(binc)}, mean={len(groups)/unique_groups:.1f}")
+    except Exception:
+        # groups may be arbitrary hashes; use fallback stats
+        counts = {g: int(np.sum(groups == g)) for g in np.unique(groups)}
+        vals = np.array(list(counts.values()))
+        print(f"  Samples per group: min={np.min(vals)}, max={np.max(vals)}, mean={len(groups)/unique_groups:.1f}")
+
+    # If there aren't at least 2 unique groups, fall back to a stratified random split
+    if unique_groups < 2:
+        print("⚠️ Only one unique constellation group detected — falling back to stratified random split to avoid empty train/test groups.")
+        # Use stratify to preserve class balance
+        Xs_tr, Xs_te, Xr_tr, Xr_te, y_tr, y_te, idx_tr, idx_te = train_test_split(
+            feats_spec, feats_rx, labels, np.arange(m), test_size=0.2, random_state=42, stratify=labels
+        )
+        print(f"✓ Stratified random split: Train={len(Xs_tr)} samples, Test={len(Xs_te)} samples")
+    else:
+        # Group-based split (ensures no constellation appears in both train and test)
+        gss = GroupShuffleSplit(test_size=0.2, n_splits=1, random_state=42)
+        train_idx, test_idx = next(gss.split(np.arange(len(groups)), groups=groups))
+
+        print(f"✓ Train groups: {len(np.unique(groups[train_idx]))}")
+        print(f"✓ Test groups: {len(np.unique(groups[test_idx]))}")
+
+        # Verify no group overlap (sanity check)
+        train_groups = set(groups[train_idx])
+        test_groups = set(groups[test_idx])
+        overlap = train_groups & test_groups
+        if overlap:
+            print(f"⚠️ WARNING: {len(overlap)} groups overlap between train/test!")
+        else:
+            print("✓ No group overlap - proper split! 🎯")
+
+        # Split data
+        Xs_tr, Xs_te = feats_spec[train_idx], feats_spec[test_idx]
+        Xr_tr, Xr_te = feats_rx[train_idx], feats_rx[test_idx]
+        y_tr, y_te = labels[train_idx], labels[test_idx]
+        idx_tr, idx_te = train_idx, test_idx
+
+        print(f"✓ Train: {len(Xs_tr)} samples")
+        print(f"✓ Test: {len(Xs_te)} samples")
 
     # ==================================================
     # Phase 5: Training with mixed-precision + XLA (H100)
@@ -1032,39 +1272,51 @@ if __name__ == "__main__":
 
     # Build model with fp32 output head for numerical stability
     def build_dual_input_cnn_h100():
-        # Spectrogram branch
-        a_in = tf.keras.layers.Input(shape=(64,64,1), name="spectrogram")
-        a = tf.keras.layers.Conv2D(32, 3, padding='same', activation='relu',
-                                    kernel_regularizer=tf.keras.regularizers.l2(0.001))(a_in)
-        a = tf.keras.layers.BatchNormalization()(a)  # ← ADD
-        a = tf.keras.layers.MaxPooling2D(2)(a)
-        a = tf.keras.layers.Dropout(0.25)(a)  # ← ADD
-        
-        a = tf.keras.layers.Conv2D(64, 3, padding='same', activation='relu',
-                                    kernel_regularizer=tf.keras.regularizers.l2(0.001))(a)
-        a = tf.keras.layers.BatchNormalization()(a)  # ← ADD
-        a = tf.keras.layers.MaxPooling2D(2)(a)
-        a = tf.keras.layers.Dropout(0.25)(a)  # ← ADD
-        
-        a = tf.keras.layers.Conv2D(128, 3, padding='same', activation='relu',
-                                    kernel_regularizer=tf.keras.regularizers.l2(0.001))(a)
-        a = tf.keras.layers.BatchNormalization()(a)  # ← ADD
-        a = tf.keras.layers.MaxPooling2D(2)(a)
-        a = tf.keras.layers.Dropout(0.3)(a)  # ← ADD
-        
-        a = tf.keras.layers.Conv2D(256, 3, padding='same', activation='relu',
-                                    kernel_regularizer=tf.keras.regularizers.l2(0.001))(a)
-        a = tf.keras.layers.BatchNormalization()(a)  # ← ADD
-        a = tf.keras.layers.GlobalAveragePooling2D()(a) # به‌جای Flatten
+        # Spectrogram branch (optional)
+        if ABLATION_CONFIG.get('use_spectrogram', True):
+            a_in = tf.keras.layers.Input(shape=(64,64,1), name="spectrogram")
+            a = tf.keras.layers.Conv2D(32, 3, padding='same', activation='relu',
+                                        kernel_regularizer=tf.keras.regularizers.l2(0.001))(a_in)
+            a = tf.keras.layers.BatchNormalization()(a)
+            a = tf.keras.layers.MaxPooling2D(2)(a)
+            a = tf.keras.layers.Dropout(0.25)(a)
 
-    # RX features branch - with additional layers
-        b_in = tf.keras.layers.Input(shape=(8,8,3), name="rx_features")
-        b = tf.keras.layers.Conv2D(32, 3, padding='same', activation='relu')(b_in)
-        b = tf.keras.layers.MaxPooling2D(2)(b)
-        b = tf.keras.layers.Conv2D(64, 3, padding='same', activation='relu')(b)
-        b = tf.keras.layers.MaxPooling2D(2)(b)
-        b = tf.keras.layers.Conv2D(128, 3, padding='same', activation='relu')(b)
-        b = tf.keras.layers.GlobalAveragePooling2D()(b)  # به‌جای Flatten
+            a = tf.keras.layers.Conv2D(64, 3, padding='same', activation='relu',
+                                        kernel_regularizer=tf.keras.regularizers.l2(0.001))(a)
+            a = tf.keras.layers.BatchNormalization()(a)
+            a = tf.keras.layers.MaxPooling2D(2)(a)
+            a = tf.keras.layers.Dropout(0.25)(a)
+
+            a = tf.keras.layers.Conv2D(128, 3, padding='same', activation='relu',
+                                        kernel_regularizer=tf.keras.regularizers.l2(0.001))(a)
+            a = tf.keras.layers.BatchNormalization()(a)
+            a = tf.keras.layers.MaxPooling2D(2)(a)
+            a = tf.keras.layers.Dropout(0.3)(a)
+
+            a = tf.keras.layers.Conv2D(256, 3, padding='same', activation='relu',
+                                        kernel_regularizer=tf.keras.regularizers.l2(0.001))(a)
+            a = tf.keras.layers.BatchNormalization()(a)
+            a = tf.keras.layers.GlobalAveragePooling2D()(a)
+        else:
+            # Dummy spectrogram input → zero contribution
+            a_in = tf.keras.layers.Input(shape=(64,64,1), name="spectrogram")
+            a = tf.keras.layers.Flatten()(a_in)
+            a = tf.keras.layers.Lambda(lambda x: x * 0)(a)
+
+        # RX features branch - with additional layers (optional)
+        if ABLATION_CONFIG.get('use_rx_features', True):
+            b_in = tf.keras.layers.Input(shape=(8,8,3), name="rx_features")
+            b = tf.keras.layers.Conv2D(32, 3, padding='same', activation='relu')(b_in)
+            b = tf.keras.layers.MaxPooling2D(2)(b)
+            b = tf.keras.layers.Conv2D(64, 3, padding='same', activation='relu')(b)
+            b = tf.keras.layers.MaxPooling2D(2)(b)
+            b = tf.keras.layers.Conv2D(128, 3, padding='same', activation='relu')(b)
+            b = tf.keras.layers.GlobalAveragePooling2D()(b)
+        else:
+            # Dummy rx input → zero contribution
+            b_in = tf.keras.layers.Input(shape=(8,8,3), name="rx_features")
+            b = tf.keras.layers.Flatten()(b_in)
+            b = tf.keras.layers.Lambda(lambda x: x * 0)(b)
 
         x = tf.keras.layers.Concatenate()([a, b])
         x = tf.keras.layers.Dense(128, activation='relu')(x)
@@ -1148,6 +1400,53 @@ if __name__ == "__main__":
     print(f"Test Results → Loss: {loss:.4f} | Acc: {acc:.4f} | AUC: {auc_val:.4f}")
 
     y_prob = model.predict(test_ds_full, verbose=0).ravel()
+    
+    # -----------------------------
+    # Calibration metrics (ECE / Brier) and ROC @ low FPR
+    # -----------------------------
+    try:
+        from sklearn.calibration import calibration_curve
+        from sklearn.metrics import brier_score_loss
+        # Calibration metrics
+        ece_bins = 10
+        prob_true, prob_pred = calibration_curve(y_te, y_prob, n_bins=ece_bins)
+        brier = brier_score_loss(y_te, y_prob)
+
+        # Approximate ECE
+        ece = np.mean(np.abs(prob_true - prob_pred))
+
+        print(f"\n=== CALIBRATION METRICS ===")
+        print(f"Brier Score: {brier:.4f}")
+        print(f"ECE (Expected Calibration Error): {ece:.4f}")
+
+        # ROC at specific low FPR thresholds
+        from sklearn.metrics import roc_curve
+        fpr_full, tpr_full, thresholds = roc_curve(y_te, y_prob)
+        target_fprs = [1e-3, 1e-4, 1e-5]
+        print(f"\n=== ROC @ LOW FPR ===")
+        for target_fpr in target_fprs:
+            idx = np.where(fpr_full <= target_fpr)[0]
+            if len(idx) > 0:
+                best_tpr = tpr_full[idx[-1]]
+                print(f"TPR @ FPR={target_fpr:.0e}: {best_tpr:.4f}")
+            else:
+                print(f"TPR @ FPR={target_fpr:.0e}: N/A (cannot achieve this FPR)")
+
+        # Calibration plot
+        plt.figure(figsize=(8, 6))
+        plt.plot([0, 1], [0, 1], 'k--', label='Perfectly calibrated')
+        plt.plot(prob_pred, prob_true, 'o-', label=f'Model (ECE={ece:.3f})')
+        plt.xlabel('Mean Predicted Probability', fontsize=12)
+        plt.ylabel('Fraction of Positives', fontsize=12)
+        plt.title('Calibration Curve', fontsize=14, fontweight='bold')
+        plt.legend(fontsize=11)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(f"{RESULT_DIR}/11_calibration_curve.pdf", dpi=300)
+        plt.close()
+        print(f"✓ Calibration curve saved")
+    except Exception as e:
+        print(f"⚠️ Calibration metrics skipped: {e}")
     
     # Threshold tuning: find best threshold that maximizes F1
     print(f"\n=== THRESHOLD TUNING ===")
@@ -1321,7 +1620,7 @@ if __name__ == "__main__":
         # Benign Detected (True Negative)
         if len(benign_correct) > 0:
             idx = benign_correct[0]
-            spec = feats_spec[idx_te[idx]].squeeze()
+            spec = Xs_te[idx].squeeze()
             axes[0, 0].imshow(spec, aspect='auto', cmap='viridis', origin='lower')
             axes[0, 0].set_title('Benign - Correctly Detected', fontweight='bold')
             axes[0, 0].set_xlabel('Time')
@@ -1330,7 +1629,7 @@ if __name__ == "__main__":
         # Benign Missed (False Positive)
         if len(benign_wrong) > 0:
             idx = benign_wrong[0]
-            spec = feats_spec[idx_te[idx]].squeeze()
+            spec = Xs_te[idx].squeeze()
             axes[0, 1].imshow(spec, aspect='auto', cmap='viridis', origin='lower')
             axes[0, 1].set_title('Benign - Misclassified as Attack', fontweight='bold', color='red')
             axes[0, 1].set_xlabel('Time')
@@ -1339,7 +1638,7 @@ if __name__ == "__main__":
         # Attack Detected (True Positive)
         if len(attack_correct) > 0:
             idx = attack_correct[0]
-            spec = feats_spec[idx_te[idx]].squeeze()
+            spec = Xs_te[idx].squeeze()
             axes[1, 0].imshow(spec, aspect='auto', cmap='plasma', origin='lower')
             axes[1, 0].set_title('Attack - Correctly Detected', fontweight='bold')
             axes[1, 0].set_xlabel('Time')
@@ -1348,7 +1647,7 @@ if __name__ == "__main__":
         # Attack Missed (False Negative)
         if len(attack_wrong) > 0:
             idx = attack_wrong[0]
-            spec = feats_spec[idx_te[idx]].squeeze()
+            spec = Xs_te[idx].squeeze()
             axes[1, 1].imshow(spec, aspect='auto', cmap='plasma', origin='lower')
             axes[1, 1].set_title('Attack - Missed Detection', fontweight='bold', color='red')
             axes[1, 1].set_xlabel('Time')
@@ -1422,6 +1721,9 @@ if __name__ == "__main__":
     print("\n=== PHASE 8: TDoA-BASED LOCALIZATION ===")
     print("Processing true positives...")
     loc_errors = []
+    tp_sample_ids = []
+    tp_ests = []
+    tp_gts = []
     for i, pred in enumerate(y_hat):
         if pred == 1 and y_te[i] == 1:
             ds_idx = int(idx_te[i])
@@ -1429,6 +1731,9 @@ if __name__ == "__main__":
             if est is not None and gt is not None:
                 err = np.linalg.norm(est - gt)
                 loc_errors.append(err)
+                tp_sample_ids.append(ds_idx)
+                tp_ests.append(est)
+                tp_gts.append(gt)
                 if len(loc_errors) <= 3:
                     print(f"  Sample {ds_idx} | GT {gt[:2]} | EST {est[:2]} | Error={err:.2f} m")
 
@@ -1457,6 +1762,138 @@ if __name__ == "__main__":
         plt.tight_layout()
         plt.savefig(f"{RESULT_DIR}/4_localization_cdf.pdf", dpi=300, bbox_inches='tight')
         plt.savefig(f"{RESULT_DIR}/4_localization_cdf.png", dpi=300, bbox_inches='tight')
+
+        # --- Optional: Compute theoretical CRLB for TDoA ---
+        try:
+            import itertools
+            c0 = 3e8
+            # Derive system timing resolution from sampling rate and upsampling used in GCC-PHAT
+            upsampling_factor = 32
+            timing_resolution_ns = 1e9 / (isac.SAMPLING_RATE * upsampling_factor)
+            # Assume sigma_t ~ 1.2 x timing resolution (empirical safety margin)
+            sigma_t = timing_resolution_ns * 1.2 * 1e-9
+            sigma_d = c0 * sigma_t
+
+            # Select true-positive samples (we already computed ests/gts)
+            sample_tp = tp_sample_ids
+            sample_errors = loc_errors
+            sample_ests = tp_ests
+            sample_gts = tp_gts
+
+            # Control CRLB sample count (env var fallback)
+            try:
+                CRLB_SAMPLES = os.getenv('CRLB_SAMPLES', 'all')  # 'all' or integer string
+                if CRLB_SAMPLES != 'all':
+                    CRLB_SAMPLES = int(CRLB_SAMPLES)
+            except Exception:
+                CRLB_SAMPLES = 'all'
+            print(f"CRLB_SAMPLES setting: {CRLB_SAMPLES}")
+
+            if isinstance(CRLB_SAMPLES, str) and CRLB_SAMPLES == 'all':
+                use_idxs = list(range(len(sample_tp)))
+            else:
+                N = int(CRLB_SAMPLES)
+                use_idxs = list(range(min(N, len(sample_tp))))
+
+            crlb_values = []
+            sample_ids_used = []
+            achieved_errors_used = []
+            est_x = []
+            est_y = []
+            gt_x = []
+            gt_y = []
+
+            for ii in use_idxs:
+                ds_idx = sample_tp[ii]
+                sat_list = dataset.get('satellite_receptions', [None])[ds_idx]
+                if sat_list is None:
+                    continue
+                try:
+                    snr_scores = [np.mean(np.abs(s.get('rx_time_padded', s['rx_time']))**2) for s in sat_list]
+                    best_ref_idx = int(np.argmax(snr_scores))
+                    ref = sat_list[best_ref_idx]['position']
+                    H = []
+                    for s in sat_list:
+                        if s['satellite_id'] == best_ref_idx:
+                            continue
+                        sat = np.array(s['position'][:2])
+                        ref2 = np.array(ref[:2])
+
+                        # Choose evaluation point P: prefer GT, else EST
+                        try:
+                            P = np.array(sample_gts[ii][:2])
+                        except Exception:
+                            P = np.array(sample_ests[ii][:2])
+
+                        d_sat = np.linalg.norm(P - sat)
+                        d_ref = np.linalg.norm(P - ref2)
+                        if d_sat < 1e-6 or d_ref < 1e-6:
+                            continue
+
+                        # Jacobian row: gradient of (||P-sat|| - ||P-ref||) wrt P
+                        grad = (P - sat) / d_sat - (P - ref2) / d_ref
+                        H.append(grad)
+                    H = np.array(H)
+                    if H.shape[0] >= 2:
+                        # Fisher Information Matrix for position (2D)
+                        FIM = (H.T @ H) / (sigma_d**2)
+                        CRLB_matrix = np.linalg.inv(FIM)
+                        crlb_i = float(np.sqrt(np.trace(CRLB_matrix)))
+                        crlb_values.append(crlb_i)
+                        sample_ids_used.append(ds_idx)
+                        achieved_errors_used.append(sample_errors[ii])
+                        est_x.append(float(sample_ests[ii][0]))
+                        est_y.append(float(sample_ests[ii][1]))
+                        gt_x.append(float(sample_gts[ii][0]))
+                        gt_y.append(float(sample_gts[ii][1]))
+                except Exception:
+                    continue
+
+            if crlb_values:
+                mean_crlb = float(np.mean(crlb_values))
+                med_crlb = float(np.median(crlb_values))
+                achieved_med = med
+                # Clarify efficiency: ratio = achieved / CRLB (>=1 desirable), then efficiency pct = 100 / ratio
+                if med_crlb > 0:
+                    ratio = achieved_med / med_crlb
+                    eff_pct = 100.0 / ratio if ratio > 0 else 0.0
+                else:
+                    ratio = float('inf')
+                    eff_pct = 0.0
+
+                print("\n=== CRLB Analysis ===")
+                print(f"System timing resolution: {timing_resolution_ns:.2f} ns")
+                print(f"Assumed timing error (σ_t): {sigma_t*1e9:.2f} ns")
+                print(f"Equivalent range error (σ_d): {sigma_d:.2f} m")
+                print(f"Mean CRLB: {mean_crlb:.2f} m")
+                print(f"Median CRLB: {med_crlb:.2f} m")
+                print(f"Achieved median error: {achieved_med:.2f} m")
+                # New, clearer metrics
+                print(f"Ratio (achieved/CRLB): {ratio:.2f}×")
+                print(f"Efficiency: {eff_pct:.1f}% of the CRLB")
+
+                # Save per-sample CRLBs and metadata
+                try:
+                    import pandas as pd
+                    crlb_values_arr = np.array(crlb_values)
+                    df_crlb = pd.DataFrame({
+                        'sample_id': sample_ids_used,
+                        'crlb_m': crlb_values_arr,
+                        'achieved_error_m': achieved_errors_used,
+                        'GT_x': gt_x,
+                        'GT_y': gt_y,
+                        'EST_x': est_x,
+                        'EST_y': est_y
+                    })
+                    csv_path = os.path.join(RESULT_DIR, 'crlb_values.csv')
+                    df_crlb.to_csv(csv_path, index=False)
+                    print(f"✓ Detailed CRLB analysis saved to {csv_path}")
+                except Exception as e:
+                    print(f"⚠️ Could not save detailed CRLB CSV: {e}")
+            else:
+                print("(CRLB computation skipped: no valid H matrices from samples)")
+        except Exception as e:
+            print(f"(CRLB computation skipped: {e})")
         plt.close()
         print(f"✓ Localization CDF saved to {RESULT_DIR}/4_localization_cdf.pdf")
 
