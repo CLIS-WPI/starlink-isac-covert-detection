@@ -1,652 +1,216 @@
 ✓ Directory ensured: dataset/
 ✓ Directory ensured: model/
 ✓ Directory ensured: result/
-Phase 1: Initializing ISAC System (CPU-heavy init)...
-Using TR 38.811 DenseUrban model (NTN).
-Phase 2/3: Generating multi-satellite dataset (GPU-friendly ops where possible)...
-  [Sample 0] New constellation generated. Alts: ['522.7km', '516.1km', '322.6km']...
-  [Covert] Power preserved: 1.018750 → 1.357685 → 1.018750
-  [Covert] Power preserved: 1.002500 → 1.276384 → 1.002500
-  [Covert] Power preserved: 0.996250 → 1.323373 → 0.996250
-  [Covert] Power preserved: 0.995000 → 1.235023 → 0.995000
-  [Covert] Power preserved: 0.986250 → 1.290407 → 0.986250
-  [Covert] Power preserved: 1.011250 → 1.315407 → 1.011250
-  [Covert] Power preserved: 0.988750 → 1.323425 → 0.988750
-  [Covert] Power preserved: 0.993750 → 1.348099 → 0.993750
-  [Covert] Power preserved: 0.996250 → 1.304512 → 0.996250
-  [Covert] Power preserved: 1.035000 → 1.334239 → 1.035000
-  [Covert] Power preserved: 0.981250 → 1.246369 → 0.981250
-  [Covert] Power preserved: 1.022500 → 1.382427 → 1.022500
-  [Covert] Power preserved: 1.036250 → 1.348773 → 1.036250
-  [Covert] Power preserved: 0.977500 → 1.296916 → 0.977500
-  [Covert] Power preserved: 0.956250 → 1.299290 → 0.956250
-  [Covert] Power preserved: 1.016250 → 1.378965 → 1.016250
-  [Covert] Power preserved: 0.955000 → 1.253580 → 0.955000
-  [Covert] Power preserved: 1.011250 → 1.360023 → 1.011250
-  [Covert] Power preserved: 0.996250 → 1.280888 → 0.996250
-  [Covert] Power preserved: 0.988750 → 1.301273 → 0.988750
-  [Covert] Power preserved: 1.007500 → 1.283773 → 1.007500
-  [Covert] Power preserved: 1.005000 → 1.286849 → 1.005000
-  [Covert] Power preserved: 0.966250 → 1.250888 → 0.966250
-  [Covert] Power preserved: 1.000000 → 1.276273 → 1.000000
-  [Covert] Power preserved: 1.003750 → 1.378780 → 1.003750
-  [Covert] Power preserved: 0.998750 → 1.333580 → 0.998750
-  [Covert] Power preserved: 0.990000 → 1.274638 → 0.990000
-  [Covert] Power preserved: 1.002500 → 1.289268 → 1.002500
-  [Covert] Power preserved: 1.005000 → 1.282589 → 1.005000
-  [Covert] Power preserved: 1.001250 → 1.310984 → 1.001250
-  [Covert] Power preserved: 0.996250 → 1.273181 → 0.996250
-  [Covert] Power preserved: 0.986250 → 1.268100 → 0.986250
-  [Covert] Power preserved: 1.057500 → 1.389542 → 1.057500
-  [Covert] Power preserved: 1.006250 → 1.263003 → 1.006250
-  [Covert] Power preserved: 1.021250 → 1.314912 → 1.021250
-  [Covert] Power preserved: 0.998750 → 1.266657 → 0.998750
-  [Covert] Power preserved: 1.036250 → 1.340407 → 1.036250
-  [Covert] Power preserved: 0.961250 → 1.244571 → 0.961250
-  [Covert] Power preserved: 1.000000 → 1.270696 → 1.000000
-  [Covert] Power preserved: 1.042500 → 1.310407 → 1.042500
-  [Covert] Power preserved: 1.011250 → 1.262426 → 1.011250
-  [Covert] Power preserved: 1.018750 → 1.325696 → 1.018750
-  [Covert] Power preserved: 0.987500 → 1.326435 → 0.987500
-  [Covert] Power preserved: 0.991250 → 1.284409 → 0.991250
-  [Covert] Power preserved: 1.030000 → 1.331369 → 1.030000
-  [Covert] Power preserved: 0.988750 → 1.308980 → 0.988750
-Generated 100/3000 multi-sat samples
-  [Covert] Power preserved: 1.021250 → 1.291946 → 1.021250
-  [Covert] Power preserved: 0.997500 → 1.282138 → 0.997500
-  [Covert] Power preserved: 1.008750 → 1.287811 → 1.008750
-  [Covert] Power preserved: 1.001250 → 1.324926 → 1.001250
-  [Covert] Power preserved: 1.006250 → 1.246272 → 1.006250
-  [Covert] Power preserved: 0.986250 → 1.265311 → 0.986250
-  [Covert] Power preserved: 1.003750 → 1.340555 → 1.003750
-  [Covert] Power preserved: 1.021250 → 1.368551 → 1.021250
-  [Covert] Power preserved: 1.003750 → 1.316273 → 1.003750
-  [Covert] Power preserved: 1.001250 → 1.332478 → 1.001250
-  [Covert] Power preserved: 1.002500 → 1.234157 → 1.002500
-  [Covert] Power preserved: 1.000000 → 1.231657 → 1.000000
-  [Covert] Power preserved: 0.941250 → 1.255244 → 0.941250
-  [Covert] Power preserved: 0.977500 → 1.221938 → 0.977500
-  [Covert] Power preserved: 0.976250 → 1.267123 → 0.976250
-  [Covert] Power preserved: 1.027500 → 1.277360 → 1.027500
-  [Covert] Power preserved: 1.010000 → 1.314157 → 1.010000
-  [Covert] Power preserved: 1.018750 → 1.361946 → 1.018750
-  [Covert] Power preserved: 0.990000 → 1.280215 → 0.990000
-  [Covert] Power preserved: 0.997500 → 1.266724 → 0.997500
-  [Covert] Power preserved: 0.968750 → 1.271591 → 0.968750
-  [Covert] Power preserved: 1.011250 → 1.357737 → 1.011250
-  [Covert] Power preserved: 0.996250 → 1.377671 → 0.996250
-  [Covert] Power preserved: 0.976250 → 1.241369 → 0.976250
-  [Covert] Power preserved: 0.998750 → 1.241561 → 0.998750
-  [Covert] Power preserved: 0.995000 → 1.254542 → 0.995000
-  [Covert] Power preserved: 0.997500 → 1.282796 → 0.997500
-  [Covert] Power preserved: 1.006250 → 1.294335 → 1.006250
-  [Covert] Power preserved: 0.973750 → 1.236080 → 0.973750
-  [Covert] Power preserved: 1.016250 → 1.371103 → 1.016250
-  [Covert] Power preserved: 1.006250 → 1.328454 → 1.006250
-  [Covert] Power preserved: 0.963750 → 1.290873 → 0.963750
-  [Covert] Power preserved: 1.003750 → 1.246058 → 1.003750
-  [Covert] Power preserved: 1.033750 → 1.363506 → 1.033750
-  [Covert] Power preserved: 1.005000 → 1.334253 → 1.005000
-  [Covert] Power preserved: 0.962500 → 1.202523 → 0.962500
-  [Covert] Power preserved: 1.000000 → 1.315311 → 1.000000
-  [Covert] Power preserved: 0.955000 → 1.267523 → 0.955000
-  [Covert] Power preserved: 0.995000 → 1.288003 → 0.995000
-  [Covert] Power preserved: 0.985000 → 1.227308 → 0.985000
-  [Covert] Power preserved: 0.993750 → 1.254764 → 0.993750
-  [Covert] Power preserved: 0.978750 → 1.285696 → 0.978750
-  [Covert] Power preserved: 0.993750 → 1.255577 → 0.993750
-  [Covert] Power preserved: 0.996250 → 1.335844 → 0.996250
-  [Covert] Power preserved: 0.953750 → 1.257094 → 0.953750
-  [Covert] Power preserved: 0.962500 → 1.238773 → 0.962500
-  [Covert] Power preserved: 0.988750 → 1.265023 → 0.988750
-  [Covert] Power preserved: 1.010000 → 1.342042 → 1.010000
-  [Covert] Power preserved: 1.003750 → 1.262634 → 1.003750
-  [Covert] Power preserved: 1.011250 → 1.289653 → 1.011250
-  [Covert] Power preserved: 0.987500 → 1.230311 → 0.987500
-  [Covert] Power preserved: 1.006250 → 1.187500 → 1.006250
-Generated 200/3000 multi-sat samples
-  [Covert] Power preserved: 0.970000 → 1.265792 → 0.970000
-  [Covert] Power preserved: 0.981250 → 1.256206 → 0.981250
-  [Covert] Power preserved: 0.982500 → 1.250407 → 0.982500
-  [Covert] Power preserved: 1.012500 → 1.319290 → 1.012500
-  [Covert] Power preserved: 1.018750 → 1.334875 → 1.018750
-  [Covert] Power preserved: 1.018750 → 1.364734 → 1.018750
-  [Covert] Power preserved: 0.986250 → 1.344704 → 0.986250
-  [Covert] Power preserved: 1.010000 → 1.333676 → 1.010000
-  [Covert] Power preserved: 1.023750 → 1.408773 → 1.023750
-  [Covert] Power preserved: 0.992500 → 1.261221 → 0.992500
-  [Covert] Power preserved: 1.005000 → 1.292426 → 1.005000
-  [Covert] Power preserved: 1.026250 → 1.327619 → 1.026250
-  [Covert] Power preserved: 0.977500 → 1.256561 → 0.977500
-  [Covert] Power preserved: 1.001250 → 1.339024 → 1.001250
-  [Covert] Power preserved: 1.016250 → 1.281369 → 1.016250
-  [Covert] Power preserved: 1.038750 → 1.340119 → 1.038750
-  [Covert] Power preserved: 1.017500 → 1.282619 → 1.017500
-  [Covert] Power preserved: 1.008750 → 1.313565 → 1.008750
-  [Covert] Power preserved: 1.002500 → 1.298292 → 1.002500
-  [Covert] Power preserved: 0.987500 → 1.254091 → 0.987500
-  [Covert] Power preserved: 1.010000 → 1.333676 → 1.010000
-  [Covert] Power preserved: 1.005000 → 1.324416 → 1.005000
-  [Covert] Power preserved: 1.002500 → 1.290740 → 1.002500
-  [Covert] Power preserved: 1.005000 → 1.362138 → 1.005000
-  [Covert] Power preserved: 1.002500 → 1.330437 → 1.002500
-  [Covert] Power preserved: 1.011250 → 1.318196 → 1.011250
-  [Covert] Power preserved: 0.987500 → 1.281975 → 0.987500
-  [Covert] Power preserved: 0.990000 → 1.280215 → 0.990000
-  [Covert] Power preserved: 0.976250 → 1.207907 → 0.976250
-  [Covert] Power preserved: 1.022500 → 1.365696 → 1.022500
-  [Covert] Power preserved: 1.011250 → 1.298676 → 1.011250
-  [Covert] Power preserved: 1.017500 → 1.302138 → 1.017500
-  [Covert] Power preserved: 0.990000 → 1.327619 → 0.990000
-  [Covert] Power preserved: 1.036250 → 1.339091 → 1.036250
-  [Covert] Power preserved: 0.992500 → 1.257619 → 0.992500
-  [Covert] Power preserved: 1.027500 → 1.323292 → 1.027500
-  [Covert] Power preserved: 1.000000 → 1.251176 → 1.000000
-  [Covert] Power preserved: 1.011250 → 1.290311 → 1.011250
-  [Covert] Power preserved: 0.972500 → 1.257138 → 0.972500
-  [Covert] Power preserved: 0.992500 → 1.302892 → 0.992500
-  [Covert] Power preserved: 1.010000 → 1.255599 → 1.010000
-  [Covert] Power preserved: 1.002500 → 1.317811 → 1.002500
-  [Covert] Power preserved: 0.992500 → 1.265984 → 0.992500
-  [Covert] Power preserved: 1.031250 → 1.304076 → 1.031250
-  [Covert] Power preserved: 0.990000 → 1.293344 → 0.990000
-  [Covert] Power preserved: 0.997500 → 1.293292 → 0.997500
-  [Covert] Power preserved: 1.018750 → 1.279105 → 1.018750
-Generated 300/3000 multi-sat samples
-  [Covert] Power preserved: 1.007500 → 1.339542 → 1.007500
-  [Covert] Power preserved: 0.992500 → 1.279926 → 0.992500
-  [Covert] Power preserved: 0.988750 → 1.301117 → 0.988750
-  [Covert] Power preserved: 1.017500 → 1.266702 → 1.017500
-  [Covert] Power preserved: 0.990000 → 1.305969 → 0.990000
-  [Covert] Power preserved: 0.991250 → 1.242426 → 0.991250
-  [Covert] Power preserved: 1.000000 → 1.284638 → 1.000000
-  [Covert] Power preserved: 1.026250 → 1.269061 → 1.026250
-  [Covert] Power preserved: 1.002500 → 1.306657 → 1.002500
-  [Covert] Power preserved: 0.957500 → 1.283151 → 0.957500
-  [Covert] Power preserved: 1.016250 → 1.348950 → 1.016250
-  [Covert] Power preserved: 0.965000 → 1.235696 → 0.965000
-  [Covert] Power preserved: 0.982500 → 1.261561 → 0.982500
-  [Covert] Power preserved: 1.016250 → 1.281369 → 1.016250
-  [Covert] Power preserved: 1.013750 → 1.258691 → 1.013750
-  [Covert] Power preserved: 1.018750 → 1.316014 → 1.018750
-  [Covert] Power preserved: 0.986250 → 1.298773 → 0.986250
-  [Covert] Power preserved: 1.026250 → 1.292841 → 1.026250
-  [Covert] Power preserved: 1.020000 → 1.309557 → 1.020000
-  [Covert] Power preserved: 0.977500 → 1.260163 → 0.977500
-  [Covert] Power preserved: 0.995000 → 1.318676 → 0.995000
-  [Covert] Power preserved: 1.018750 → 1.323565 → 1.018750
-  [Covert] Power preserved: 1.011250 → 1.286206 → 1.011250
-  [Covert] Power preserved: 1.012500 → 1.285984 → 1.012500
-  [Covert] Power preserved: 1.016250 → 1.292523 → 1.016250
-  [Covert] Power preserved: 0.992500 → 1.261221 → 0.992500
-  [Covert] Power preserved: 1.011250 → 1.332138 → 1.011250
-  [Covert] Power preserved: 0.995000 → 1.313758 → 0.995000
-  [Covert] Power preserved: 1.010000 → 1.303003 → 1.010000
-  [Covert] Power preserved: 0.991250 → 1.289830 → 0.991250
-  [Covert] Power preserved: 0.995000 → 1.328358 → 0.995000
-  [Covert] Power preserved: 1.020000 → 1.344490 → 1.020000
-  [Covert] Power preserved: 0.996250 → 1.295489 → 0.996250
-  [Covert] Power preserved: 0.978750 → 1.244682 → 0.978750
-  [Covert] Power preserved: 1.001250 → 1.306879 → 1.001250
-  [Covert] Power preserved: 0.985000 → 1.277345 → 0.985000
-  [Covert] Power preserved: 0.960000 → 1.242663 → 0.960000
-  [Covert] Power preserved: 1.020000 → 1.365984 → 1.020000
-  [Covert] Power preserved: 0.986250 → 1.301561 → 0.986250
-  [Covert] Power preserved: 1.027500 → 1.318529 → 1.027500
-  [Covert] Power preserved: 1.010000 → 1.364697 → 1.010000
-  [Covert] Power preserved: 0.990000 → 1.299734 → 0.990000
-  [Covert] Power preserved: 0.996250 → 1.253003 → 0.996250
-  [Covert] Power preserved: 1.037500 → 1.356413 → 1.037500
-  [Covert] Power preserved: 1.007500 → 1.343802 → 1.007500
-  [Covert] Power preserved: 1.022500 → 1.301561 → 1.022500
-  [Covert] Power preserved: 0.948750 → 1.243225 → 0.948750
-  [Covert] Power preserved: 1.011250 → 1.349024 → 1.011250
-  [Covert] Power preserved: 0.983750 → 1.333839 → 0.983750
-  [Covert] Power preserved: 1.017500 → 1.338388 → 1.017500
-Generated 400/3000 multi-sat samples
-  [Covert] Power preserved: 1.010000 → 1.314815 → 1.010000
-  [Covert] Power preserved: 0.986250 → 1.298114 → 0.986250
-  [Covert] Power preserved: 1.038750 → 1.321916 → 1.038750
-  [Covert] Power preserved: 1.018750 → 1.328329 → 1.018750
-  [Covert] Power preserved: 1.018750 → 1.337353 → 1.018750
-  [Covert] Power preserved: 0.997500 → 1.258669 → 0.997500
-  [Covert] Power preserved: 1.020000 → 1.307426 → 1.020000
-  [Covert] Power preserved: 1.031250 → 1.304734 → 1.031250
-  [Covert] Power preserved: 1.032500 → 1.297619 → 1.032500
-  [Covert] Power preserved: 0.981250 → 1.269490 → 0.981250
-  [Covert] Power preserved: 0.963750 → 1.242811 → 0.963750
-  [Covert] Power preserved: 0.997500 → 1.338410 → 0.997500
-  [Covert] Power preserved: 0.992500 → 1.291080 → 0.992500
-  [Covert] Power preserved: 0.987500 → 1.290999 → 0.987500
-  [Covert] Power preserved: 1.010000 → 1.263965 → 1.010000
-  [Covert] Power preserved: 1.011250 → 1.316724 → 1.011250
-  [Covert] Power preserved: 0.985000 → 1.280792 → 0.985000
-  [Covert] Power preserved: 0.982500 → 1.267138 → 0.982500
-  [Covert] Power preserved: 1.017500 → 1.334128 → 1.017500
-  [Covert] Power preserved: 1.035000 → 1.363595 → 1.035000
-  [Covert] Power preserved: 0.995000 → 1.240599 → 0.995000
-  [Covert] Power preserved: 1.038750 → 1.315022 → 1.038750
-  [Covert] Power preserved: 1.006250 → 1.310407 → 1.006250
-  [Covert] Power preserved: 0.981250 → 1.257523 → 0.981250
-  [Covert] Power preserved: 1.027500 → 1.326080 → 1.027500
-  [Covert] Power preserved: 1.010000 → 1.303159 → 1.010000
-  [Covert] Power preserved: 0.978750 → 1.230585 → 0.978750
-  [Covert] Power preserved: 0.973750 → 1.283484 → 0.973750
-  [Covert] Power preserved: 1.002500 → 1.351273 → 1.002500
-  [Covert] Power preserved: 0.997500 → 1.273928 → 0.997500
-  [Covert] Power preserved: 0.970000 → 1.274157 → 0.970000
-  [Covert] Power preserved: 0.983750 → 1.278884 → 0.983750
-  [Covert] Power preserved: 0.985000 → 1.302441 → 0.985000
-  [Covert] Power preserved: 0.993750 → 1.280674 → 0.993750
-  [Covert] Power preserved: 1.040000 → 1.344157 → 1.040000
-  [Covert] Power preserved: 0.973750 → 1.300215 → 0.973750
-  [Covert] Power preserved: 1.017500 → 1.348070 → 1.017500
-  [Covert] Power preserved: 1.012500 → 1.322234 → 1.012500
-  [Covert] Power preserved: 1.036250 → 1.341065 → 1.036250
-  [Covert] Power preserved: 1.011250 → 1.348713 → 1.011250
-  [Covert] Power preserved: 0.976250 → 1.295163 → 0.976250
-  [Covert] Power preserved: 0.992500 → 1.302234 → 0.992500
-  [Covert] Power preserved: 0.993750 → 1.291672 → 0.993750
-  [Covert] Power preserved: 0.993750 → 1.189157 → 0.993750
-  [Covert] Power preserved: 1.003750 → 1.243114 → 1.003750
-Generated 500/3000 multi-sat samples
-  [Sample 500] New constellation generated. Alts: ['567.8km', '519.3km', '526.0km']...
-  [Covert] Power preserved: 1.013750 → 1.322670 → 1.013750
-  [Covert] Power preserved: 0.983750 → 1.298906 → 0.983750
-  [Covert] Power preserved: 1.022500 → 1.328787 → 1.022500
-  [Covert] Power preserved: 1.016250 → 1.316302 → 1.016250
-  [Covert] Power preserved: 1.005000 → 1.270119 → 1.005000
-  [Covert] Power preserved: 1.005000 → 1.339830 → 1.005000
-  [Covert] Power preserved: 0.982500 → 1.285185 → 0.982500
-  [Covert] Power preserved: 0.981250 → 1.274253 → 0.981250
-  [Covert] Power preserved: 1.000000 → 1.283321 → 1.000000
-  [Covert] Power preserved: 0.993750 → 1.295119 → 0.993750
-  [Covert] Power preserved: 1.026250 → 1.323011 → 1.026250
-  [Covert] Power preserved: 0.952500 → 1.271916 → 0.952500
-  [Covert] Power preserved: 0.968750 → 1.285378 → 0.968750
-  [Covert] Power preserved: 0.983750 → 1.265599 → 0.983750
-  [Covert] Power preserved: 1.041250 → 1.328676 → 1.041250
-  [Covert] Power preserved: 0.987500 → 1.309704 → 0.987500
-  [Covert] Power preserved: 1.003750 → 1.352523 → 1.003750
-  [Covert] Power preserved: 1.003750 → 1.296095 → 1.003750
-  [Covert] Power preserved: 1.003750 → 1.344157 → 1.003750
-  [Covert] Power preserved: 0.988750 → 1.198987 → 0.988750
-  [Covert] Power preserved: 0.978750 → 1.272567 → 0.978750
-  [Covert] Power preserved: 0.982500 → 1.300444 → 0.982500
-  [Covert] Power preserved: 0.980000 → 1.213129 → 0.980000
-  [Covert] Power preserved: 0.992500 → 1.268772 → 0.992500
-  [Covert] Power preserved: 1.036250 → 1.328595 → 1.036250
-  [Covert] Power preserved: 0.976250 → 1.277619 → 0.976250
-  [Covert] Power preserved: 0.978750 → 1.269623 → 0.978750
-  [Covert] Power preserved: 1.010000 → 1.305134 → 1.010000
-  [Covert] Power preserved: 1.023750 → 1.336272 → 1.023750
-  [Covert] Power preserved: 0.978750 → 1.341465 → 0.978750
-  [Covert] Power preserved: 0.998750 → 1.291753 → 0.998750
-  [Covert] Power preserved: 1.007500 → 1.292138 → 1.007500
-  [Covert] Power preserved: 0.963750 → 1.226080 → 0.963750
-  [Covert] Power preserved: 0.990000 → 1.269061 → 0.990000
-  [Covert] Power preserved: 1.001250 → 1.319350 → 1.001250
-  [Covert] Power preserved: 0.983750 → 1.230977 → 0.983750
-  [Covert] Power preserved: 1.016250 → 1.339771 → 1.016250
-  [Covert] Power preserved: 1.001250 → 1.274076 → 1.001250
-  [Covert] Power preserved: 1.028750 → 1.318965 → 1.028750
-  [Covert] Power preserved: 1.031250 → 1.276850 → 1.031250
-  [Covert] Power preserved: 1.021250 → 1.328196 → 1.021250
-  [Covert] Power preserved: 0.982500 → 1.237279 → 0.982500
-  [Covert] Power preserved: 1.005000 → 1.329993 → 1.005000
-  [Covert] Power preserved: 1.045000 → 1.344239 → 1.045000
-  [Covert] Power preserved: 0.962500 → 1.267974 → 0.962500
-  [Covert] Power preserved: 1.026250 → 1.341561 → 1.026250
-  [Covert] Power preserved: 1.007500 → 1.318551 → 1.007500
-Generated 600/3000 multi-sat samples
-  [Covert] Power preserved: 0.971250 → 1.262937 → 0.971250
-  [Covert] Power preserved: 0.988750 → 1.322922 → 0.988750
-  [Covert] Power preserved: 1.038750 → 1.315023 → 1.038750
-  [Covert] Power preserved: 1.035000 → 1.344734 → 1.035000
-  [Covert] Power preserved: 0.971250 → 1.291983 → 0.971250
-  [Covert] Power preserved: 0.970000 → 1.251191 → 0.970000
-  [Covert] Power preserved: 0.991250 → 1.242426 → 0.991250
-  [Covert] Power preserved: 0.988750 → 1.301273 → 0.988750
-  [Covert] Power preserved: 0.993750 → 1.268048 → 0.993750
-  [Covert] Power preserved: 0.988750 → 1.305377 → 0.988750
-  [Covert] Power preserved: 1.022500 → 1.315503 → 1.022500
-  [Covert] Power preserved: 1.011250 → 1.309830 → 1.011250
-  [Covert] Power preserved: 0.973750 → 1.290378 → 0.973750
-  [Covert] Power preserved: 0.991250 → 1.318218 → 0.991250
-  [Covert] Power preserved: 1.012500 → 1.296480 → 1.012500
-  [Covert] Power preserved: 1.031250 → 1.346561 → 1.031250
-  [Covert] Power preserved: 1.001250 → 1.276709 → 1.001250
-  [Covert] Power preserved: 1.007500 → 1.272619 → 1.007500
-  [Covert] Power preserved: 0.990000 → 1.322042 → 0.990000
-  [Covert] Power preserved: 0.973750 → 1.298085 → 0.973750
-  [Covert] Power preserved: 1.025000 → 1.329157 → 1.025000
-  [Covert] Power preserved: 0.965000 → 1.241273 → 0.965000
-  [Covert] Power preserved: 1.020000 → 1.393055 → 1.020000
-  [Covert] Power preserved: 1.018750 → 1.353580 → 1.018750
-  [Covert] Power preserved: 1.002500 → 1.296162 → 1.002500
-  [Covert] Power preserved: 0.985000 → 1.261273 → 0.985000
-  [Covert] Power preserved: 1.000000 → 1.323676 → 1.000000
-  [Covert] Power preserved: 1.010000 → 1.289216 → 1.010000
-  [Covert] Power preserved: 0.987500 → 1.269349 → 0.987500
-  [Covert] Power preserved: 1.022500 → 1.295984 → 1.022500
-  [Covert] Power preserved: 0.978750 → 1.310792 → 0.978750
-  [Covert] Power preserved: 1.008750 → 1.302567 → 1.008750
-  [Covert] Power preserved: 0.978750 → 1.294061 → 0.978750
-  [Covert] Power preserved: 1.001250 → 1.269157 → 1.001250
-  [Covert] Power preserved: 1.006250 → 1.232330 → 1.006250
-  [Covert] Power preserved: 1.023750 → 1.305599 → 1.023750
-  [Covert] Power preserved: 0.980000 → 1.294497 → 0.980000
-  [Covert] Power preserved: 1.010000 → 1.344017 → 1.010000
-  [Covert] Power preserved: 1.001250 → 1.288676 → 1.001250
-  [Covert] Power preserved: 0.990000 → 1.287108 → 0.990000
-  [Covert] Power preserved: 0.990000 → 1.273321 → 0.990000
-  [Covert] Power preserved: 1.013750 → 1.359734 → 1.013750
-  [Covert] Power preserved: 1.030000 → 1.403869 → 1.030000
-  [Covert] Power preserved: 0.987500 → 1.258351 → 0.987500
-  [Covert] Power preserved: 1.043750 → 1.423196 → 1.043750
-  [Covert] Power preserved: 1.022500 → 1.352256 → 1.022500
-  [Covert] Power preserved: 0.983750 → 1.212619 → 0.983750
-  [Covert] Power preserved: 1.031250 → 1.305392 → 1.031250
-  [Covert] Power preserved: 1.022500 → 1.307138 → 1.022500
-  [Covert] Power preserved: 0.985000 → 1.261273 → 0.985000
-  [Covert] Power preserved: 0.973750 → 1.261176 → 0.973750
-  [Covert] Power preserved: 0.962500 → 1.272234 → 0.962500
-  [Covert] Power preserved: 0.997500 → 1.321679 → 0.997500
-  [Covert] Power preserved: 0.983750 → 1.318580 → 0.983750
-  [Covert] Power preserved: 1.010000 → 1.299556 → 1.010000
-  [Covert] Power preserved: 0.982500 → 1.246302 → 0.982500
-  [Covert] Power preserved: 0.987500 → 1.319542 → 0.987500
-  [Covert] Power preserved: 0.976250 → 1.266465 → 0.976250
-Generated 700/3000 multi-sat samples
-  [Covert] Power preserved: 1.015000 → 1.308003 → 1.015000
-  [Covert] Power preserved: 0.997500 → 1.265407 → 0.997500
-  [Covert] Power preserved: 0.993750 → 1.295119 → 0.993750
-  [Covert] Power preserved: 0.990000 → 1.292685 → 0.990000
-  [Covert] Power preserved: 1.015000 → 1.310134 → 1.015000
-  [Covert] Power preserved: 1.010000 → 1.309239 → 1.010000
-  [Covert] Power preserved: 0.993750 → 1.242138 → 0.993750
-  [Covert] Power preserved: 1.033750 → 1.252108 → 1.033750
-  [Covert] Power preserved: 1.006250 → 1.310407 → 1.006250
-  [Covert] Power preserved: 0.967500 → 1.278706 → 0.967500
-  [Covert] Power preserved: 1.010000 → 1.304978 → 1.010000
-  [Covert] Power preserved: 0.976250 → 1.325023 → 0.976250
-  [Covert] Power preserved: 1.011250 → 1.223388 → 1.011250
-  [Covert] Power preserved: 0.986250 → 1.229061 → 0.986250
-  [Covert] Power preserved: 0.965000 → 1.221753 → 0.965000
-  [Covert] Power preserved: 1.007500 → 1.250311 → 1.007500
-  [Covert] Power preserved: 1.040000 → 1.341369 → 1.040000
-  [Covert] Power preserved: 0.992500 → 1.187478 → 0.992500
-  [Covert] Power preserved: 0.981250 → 1.165732 → 0.981250
-  [Covert] Power preserved: 1.022500 → 1.347493 → 1.022500
-  [Covert] Power preserved: 1.002500 → 1.328151 → 1.002500
-  [Covert] Power preserved: 1.035000 → 1.323240 → 1.035000
-  [Covert] Power preserved: 0.978750 → 1.246657 → 0.978750
-  [Covert] Power preserved: 0.972500 → 1.293388 → 0.972500
-  [Covert] Power preserved: 0.978750 → 1.246657 → 0.978750
-  [Covert] Power preserved: 1.028750 → 1.332907 → 1.028750
-  [Covert] Power preserved: 0.975000 → 1.307389 → 0.975000
-  [Covert] Power preserved: 0.985000 → 1.232227 → 0.985000
-  [Covert] Power preserved: 0.968750 → 1.314734 → 0.968750
-  [Covert] Power preserved: 0.981250 → 1.288854 → 0.981250
-  [Covert] Power preserved: 1.006250 → 1.264631 → 1.006250
-  [Covert] Power preserved: 1.008750 → 1.285178 → 1.008750
-  [Covert] Power preserved: 0.983750 → 1.308085 → 0.983750
-  [Covert] Power preserved: 1.000000 → 1.312523 → 1.000000
-  [Covert] Power preserved: 0.986250 → 1.248580 → 0.986250
-  [Covert] Power preserved: 1.015000 → 1.309475 → 1.015000
-  [Covert] Power preserved: 1.021250 → 1.358869 → 1.021250
-  [Covert] Power preserved: 0.997500 → 1.289187 → 0.997500
-  [Covert] Power preserved: 0.998750 → 1.297330 → 0.998750
-  [Covert] Power preserved: 0.986250 → 1.302219 → 0.986250
-  [Covert] Power preserved: 1.048750 → 1.322234 → 1.048750
-  [Covert] Power preserved: 1.011250 → 1.325592 → 1.011250
-  [Covert] Power preserved: 1.002500 → 1.259253 → 1.002500
-  [Covert] Power preserved: 1.047500 → 1.284734 → 1.047500
-  [Covert] Power preserved: 0.977500 → 1.255747 → 0.977500
-Generated 800/3000 multi-sat samples
-  [Covert] Power preserved: 0.995000 → 1.298343 → 0.995000
-  [Covert] Power preserved: 1.001250 → 1.277523 → 1.001250
-  [Covert] Power preserved: 0.968750 → 1.275696 → 0.968750
-  [Covert] Power preserved: 1.023750 → 1.357767 → 1.023750
-  [Covert] Power preserved: 0.988750 → 1.304061 → 0.988750
-  [Covert] Power preserved: 1.010000 → 1.294638 → 1.010000
-  [Covert] Power preserved: 0.992500 → 1.307811 → 0.992500
-  [Covert] Power preserved: 1.011250 → 1.326561 → 1.011250
-  [Covert] Power preserved: 0.985000 → 1.278003 → 0.985000
-  [Covert] Power preserved: 0.991250 → 1.317559 → 0.991250
-  [Covert] Power preserved: 1.006250 → 1.290888 → 1.006250
-  [Covert] Power preserved: 0.981250 → 1.293773 → 0.981250
-  [Covert] Power preserved: 0.973750 → 1.219349 → 0.973750
-  [Covert] Power preserved: 0.982500 → 1.236465 → 0.982500
-  [Covert] Power preserved: 0.937500 → 1.255600 → 0.937500
-  [Covert] Power preserved: 1.003750 → 1.285599 → 1.003750
-  [Covert] Power preserved: 1.020000 → 1.324157 → 1.020000
-  [Covert] Power preserved: 1.018750 → 1.334719 → 1.018750
-  [Covert] Power preserved: 0.950000 → 1.190925 → 0.950000
-  [Covert] Power preserved: 0.998750 → 1.308484 → 0.998750
-  [Covert] Power preserved: 1.007500 → 1.244734 → 1.007500
-  [Covert] Power preserved: 0.987500 → 1.311177 → 0.987500
-  [Covert] Power preserved: 0.962500 → 1.283388 → 0.962500
-  [Covert] Power preserved: 1.006250 → 1.309091 → 1.006250
-  [Covert] Power preserved: 1.008750 → 1.298965 → 1.008750
-  [Covert] Power preserved: 1.005000 → 1.340991 → 1.005000
-  [Covert] Power preserved: 0.995000 → 1.301287 → 0.995000
-  [Covert] Power preserved: 0.983750 → 1.257234 → 0.983750
-  [Covert] Power preserved: 0.975000 → 1.225673 → 0.975000
-  [Covert] Power preserved: 0.978750 → 1.318499 → 0.978750
-  [Covert] Power preserved: 1.022500 → 1.312715 → 1.022500
-  [Covert] Power preserved: 0.973750 → 1.260015 → 0.973750
-  [Covert] Power preserved: 0.997500 → 1.263277 → 0.997500
-  [Covert] Power preserved: 0.985000 → 1.300311 → 0.985000
-  [Covert] Power preserved: 1.021250 → 1.308018 → 1.021250
-  [Covert] Power preserved: 1.005000 → 1.406598 → 1.005000
-  [Covert] Power preserved: 1.018750 → 1.352767 → 1.018750
-  [Covert] Power preserved: 0.986250 → 1.304350 → 0.986250
-  [Covert] Power preserved: 0.992500 → 1.260407 → 0.992500
-  [Covert] Power preserved: 0.997500 → 1.315600 → 0.997500
-  [Covert] Power preserved: 0.997500 → 1.284926 → 0.997500
-  [Covert] Power preserved: 0.981250 → 1.288196 → 0.981250
-  [Covert] Power preserved: 1.007500 → 1.292796 → 1.007500
-  [Covert] Power preserved: 1.001250 → 1.299017 → 1.001250
-  [Covert] Power preserved: 1.018750 → 1.325037 → 1.018750
-  [Covert] Power preserved: 0.988750 → 1.284542 → 0.988750
-  [Covert] Power preserved: 0.972500 → 1.287656 → 0.972500
-  [Covert] Power preserved: 1.016250 → 1.281369 → 1.016250
-  [Covert] Power preserved: 0.973750 → 1.227715 → 0.973750
-Generated 900/3000 multi-sat samples
-  [Covert] Power preserved: 1.031250 → 1.266509 → 1.031250
-  [Covert] Power preserved: 0.976250 → 1.247604 → 0.976250
-  [Covert] Power preserved: 1.002500 → 1.261539 → 1.002500
-  [Covert] Power preserved: 1.031250 → 1.331147 → 1.031250
-  [Covert] Power preserved: 0.995000 → 1.276850 → 0.995000
-  [Covert] Power preserved: 1.002500 → 1.345696 → 1.002500
-  [Covert] Power preserved: 0.972500 → 1.243196 → 0.972500
-  [Covert] Power preserved: 0.976250 → 1.305503 → 0.976250
-  [Covert] Power preserved: 0.993750 → 1.241480 → 0.993750
-  [Covert] Power preserved: 1.020000 → 1.369276 → 1.020000
-  [Covert] Power preserved: 0.990000 → 1.274638 → 0.990000
-  [Covert] Power preserved: 0.981250 → 1.296561 → 0.981250
-  [Covert] Power preserved: 0.997500 → 1.282138 → 0.997500
-  [Covert] Power preserved: 0.976250 → 1.294349 → 0.976250
-  [Covert] Power preserved: 1.012500 → 1.311739 → 1.012500
-  [Covert] Power preserved: 1.008750 → 1.374254 → 1.008750
-  [Covert] Power preserved: 0.997500 → 1.303787 → 0.997500
-  [Covert] Power preserved: 0.981250 → 1.282619 → 0.981250
-  [Covert] Power preserved: 0.980000 → 1.300732 → 0.980000
-  [Covert] Power preserved: 1.037500 → 1.334608 → 1.037500
-  [Covert] Power preserved: 0.975000 → 1.318196 → 0.975000
-  [Covert] Power preserved: 1.028750 → 1.296657 → 1.028750
-  [Covert] Power preserved: 0.977500 → 1.257219 → 0.977500
-  [Covert] Power preserved: 0.995000 → 1.288003 → 0.995000
-  [Covert] Power preserved: 0.968750 → 1.268144 → 0.968750
-  [Covert] Power preserved: 1.020000 → 1.324157 → 1.020000
-  [Covert] Power preserved: 1.003750 → 1.335636 → 1.003750
-  [Covert] Power preserved: 1.001250 → 1.350023 → 1.001250
-  [Covert] Power preserved: 0.981250 → 1.290984 → 0.981250
-  [Covert] Power preserved: 1.015000 → 1.291428 → 1.015000
-  [Covert] Power preserved: 0.975000 → 1.302123 → 0.975000
-  [Covert] Power preserved: 0.976250 → 1.319135 → 0.976250
-  [Covert] Power preserved: 1.002500 → 1.292715 → 1.002500
-  [Covert] Power preserved: 1.045000 → 1.351946 → 1.045000
-  [Covert] Power preserved: 0.970000 → 1.240696 → 0.970000
-  [Covert] Power preserved: 0.967500 → 1.269024 → 0.967500
-  [Covert] Power preserved: 0.962500 → 1.229091 → 0.962500
-  [Covert] Power preserved: 0.988750 → 1.312426 → 0.988750
-  [Covert] Power preserved: 1.017500 → 1.310503 → 1.017500
-  [Covert] Power preserved: 0.980000 → 1.245274 → 0.980000
-  [Covert] Power preserved: 0.990000 → 1.283003 → 0.990000
-  [Covert] Power preserved: 0.987500 → 1.310363 → 0.987500
-  [Covert] Power preserved: 1.011250 → 1.290466 → 1.011250
-  [Covert] Power preserved: 0.987500 → 1.292315 → 0.987500
-  [Covert] Power preserved: 1.002500 → 1.248099 → 1.002500
-  [Covert] Power preserved: 0.995000 → 1.306206 → 0.995000
-  [Covert] Power preserved: 1.002500 → 1.315023 → 1.002500
-Generated 1000/3000 multi-sat samples
-  [Sample 1000] New constellation generated. Alts: ['532.7km', '539.4km', '562.9km']...
-  [Covert] Power preserved: 1.020000 → 1.251813 → 1.020000
-  [Covert] Power preserved: 1.032500 → 1.321243 → 1.032500
-  [Covert] Power preserved: 0.995000 → 1.265696 → 0.995000
-  [Covert] Power preserved: 0.988750 → 1.316531 → 0.988750
-  [Covert] Power preserved: 0.990000 → 1.336643 → 0.990000
-  [Covert] Power preserved: 0.977500 → 1.262796 → 0.977500
-  [Covert] Power preserved: 0.993750 → 1.264446 → 0.993750
-  [Covert] Power preserved: 0.975000 → 1.263898 → 0.975000
-  [Covert] Power preserved: 0.983750 → 1.290696 → 0.983750
-  [Covert] Power preserved: 0.983750 → 1.260023 → 0.983750
-  [Covert] Power preserved: 1.010000 → 1.316790 → 1.010000
-  [Covert] Power preserved: 0.997500 → 1.312153 → 0.997500
-  [Covert] Power preserved: 1.021250 → 1.294734 → 1.021250
-  [Covert] Power preserved: 0.980000 → 1.270873 → 0.980000
-  [Covert] Power preserved: 1.043750 → 1.314446 → 1.043750
-  [Covert] Power preserved: 1.013750 → 1.348580 → 1.013750
-  [Covert] Power preserved: 1.013750 → 1.295599 → 1.013750
-  [Covert] Power preserved: 0.993750 → 1.325792 → 0.993750
-  [Covert] Power preserved: 1.008750 → 1.252219 → 1.008750
-  [Covert] Power preserved: 0.993750 → 1.253292 → 0.993750
-  [Covert] Power preserved: 1.036250 → 1.289401 → 1.036250
-  [Covert] Power preserved: 0.992500 → 1.284032 → 0.992500
-  [Covert] Power preserved: 1.011250 → 1.301465 → 1.011250
-  [Covert] Power preserved: 0.993750 → 1.306273 → 0.993750
-  [Covert] Power preserved: 0.976250 → 1.291561 → 0.976250
-  [Covert] Power preserved: 1.026250 → 1.371421 → 1.026250
-  [Covert] Power preserved: 1.017500 → 1.277042 → 1.017500
-  [Covert] Power preserved: 1.007500 → 1.266539 → 1.007500
-  [Covert] Power preserved: 0.996250 → 1.339446 → 0.996250
-  [Covert] Power preserved: 1.031250 → 1.285370 → 1.031250
-  [Covert] Power preserved: 1.020000 → 1.329076 → 1.020000
-  [Covert] Power preserved: 0.993750 → 1.332685 → 0.993750
-  [Covert] Power preserved: 1.016250 → 1.273003 → 1.016250
-  [Covert] Power preserved: 0.980000 → 1.319594 → 0.980000
-  [Covert] Power preserved: 1.030000 → 1.328580 → 1.030000
-  [Covert] Power preserved: 0.968750 → 1.317523 → 0.968750
-  [Covert] Power preserved: 0.995000 → 1.303262 → 0.995000
-  [Covert] Power preserved: 1.026250 → 1.308100 → 1.026250
-  [Covert] Power preserved: 0.985000 → 1.303100 → 0.985000
-  [Covert] Power preserved: 1.006250 → 1.315984 → 1.006250
-  [Covert] Power preserved: 0.995000 → 1.294238 → 0.995000
-  [Covert] Power preserved: 1.002500 → 1.276139 → 1.002500
-  [Covert] Power preserved: 1.025000 → 1.329157 → 1.025000
-  [Covert] Power preserved: 1.018750 → 1.332086 → 1.018750
-  [Covert] Power preserved: 1.027500 → 1.308033 → 1.027500
-  [Covert] Power preserved: 0.955000 → 1.245215 → 0.955000
-  [Covert] Power preserved: 1.003750 → 1.275918 → 1.003750
-  [Covert] Power preserved: 1.030000 → 1.306428 → 1.030000
-  [Covert] Power preserved: 0.992500 → 1.328647 → 0.992500
-Generated 1100/3000 multi-sat samples
-  [Covert] Power preserved: 1.012500 → 1.340281 → 1.012500
-  [Covert] Power preserved: 1.030000 → 1.286095 → 1.030000
-  [Covert] Power preserved: 1.001250 → 1.324926 → 1.001250
-  [Covert] Power preserved: 0.990000 → 1.284978 → 0.990000
-  [Covert] Power preserved: 1.001250 → 1.280311 → 1.001250
-  [Covert] Power preserved: 0.990000 → 1.249039 → 0.990000
-  [Covert] Power preserved: 0.990000 → 1.296946 → 0.990000
-  [Covert] Power preserved: 0.970000 → 1.321561 → 0.970000
-  [Covert] Power preserved: 1.017500 → 1.313292 → 1.017500
-  [Covert] Power preserved: 1.016250 → 1.345503 → 1.016250
-  [Covert] Power preserved: 0.968750 → 1.254202 → 0.968750
-  [Covert] Power preserved: 0.986250 → 1.315503 → 0.986250
-  [Covert] Power preserved: 0.992500 → 1.265984 → 0.992500
-  [Covert] Power preserved: 1.005000 → 1.318181 → 1.005000
-  [Covert] Power preserved: 1.008750 → 1.313721 → 1.008750
-  [Covert] Power preserved: 1.008750 → 1.257138 → 1.008750
-  [Covert] Power preserved: 1.012500 → 1.342914 → 1.012500
-  [Covert] Power preserved: 0.946250 → 1.198085 → 0.946250
-  [Covert] Power preserved: 1.005000 → 1.311946 → 1.005000
-  [Covert] Power preserved: 1.017500 → 1.330023 → 1.017500
-  [Covert] Power preserved: 1.007500 → 1.242604 → 1.007500
-  [Covert] Power preserved: 0.992500 → 1.229734 → 0.992500
-  [Covert] Power preserved: 0.965000 → 1.262108 → 0.965000
-  [Covert] Power preserved: 0.986250 → 1.281886 → 0.986250
-  [Covert] Power preserved: 1.006250 → 1.296465 → 1.006250
-  [Covert] Power preserved: 1.001250 → 1.322138 → 1.001250
-  [Covert] Power preserved: 1.007500 → 1.250311 → 1.007500
-  [Covert] Power preserved: 1.018750 → 1.306835 → 1.018750
-  [Covert] Power preserved: 1.013750 → 1.289209 → 1.013750
-  [Covert] Power preserved: 1.030000 → 1.339734 → 1.030000
-  [Covert] Power preserved: 0.995000 → 1.333122 → 0.995000
-  [Covert] Power preserved: 1.011250 → 1.312774 → 1.011250
-  [Covert] Power preserved: 0.987500 → 1.278528 → 0.987500
-  [Covert] Power preserved: 0.988750 → 1.320637 → 0.988750
-  [Covert] Power preserved: 1.010000 → 1.303817 → 1.010000
-  [Covert] Power preserved: 1.002500 → 1.278773 → 1.002500
-  [Covert] Power preserved: 0.996250 → 1.253003 → 0.996250
-  [Covert] Power preserved: 1.030000 → 1.308558 → 1.030000
-  [Covert] Power preserved: 0.972500 → 1.301753 → 0.972500
-  [Covert] Power preserved: 1.030000 → 1.307086 → 1.030000
-  [Covert] Power preserved: 1.005000 → 1.314734 → 1.005000
-  [Covert] Power preserved: 1.000000 → 1.312523 → 1.000000
-  [Covert] Power preserved: 0.997500 → 1.335119 → 0.997500
-  [Covert] Power preserved: 0.991250 → 1.319031 → 0.991250
-  [Covert] Power preserved: 1.000000 → 1.290215 → 1.000000
-  [Covert] Power preserved: 1.010000 → 1.347619 → 1.010000
-  [Covert] Power preserved: 1.012500 → 1.283196 → 1.012500
-Generated 1200/3000 multi-sat samples
-  [Covert] Power preserved: 1.020000 → 1.273965 → 1.020000
-  [Covert] Power preserved: 0.982500 → 1.292234 → 0.982500
-  [Covert] Power preserved: 0.996250 → 1.267759 → 0.996250
-  [Covert] Power preserved: 1.020000 → 1.215407 → 1.020000
-  [Covert] Power preserved: 1.011250 → 1.298676 → 1.011250
-  [Covert] Power preserved: 0.988750 → 1.231716 → 0.988750
-  [Covert] Power preserved: 1.026250 → 1.310230 → 1.026250
-  [Covert] Power preserved: 1.026250 → 1.324830 → 1.026250
-  [Covert] Power preserved: 1.012500 → 1.345045 → 1.012500
-  [Covert] Power preserved: 1.040000 → 1.290673 → 1.040000
-  [Covert] Power preserved: 1.013750 → 1.277708 → 1.013750
-  [Covert] Power preserved: 0.973750 → 1.233292 → 0.973750
-  [Covert] Power preserved: 0.982500 → 1.342427 → 0.982500
-  [Covert] Power preserved: 1.010000 → 1.378950 → 1.010000
-  [Covert] Power preserved: 0.996250 → 1.304512 → 0.996250
-  [Covert] Power preserved: 0.938750 → 1.209446 → 0.938750
-  [Covert] Power preserved: 0.998750 → 1.294697 → 0.998750
-  [Covert] Power preserved: 1.018750 → 1.297500 → 1.018750
-  [Covert] Power preserved: 1.043750 → 1.335437 → 1.043750
-  [Covert] Power preserved: 1.023750 → 1.322330 → 1.023750
-  [Covert] Power preserved: 1.012500 → 1.350119 → 1.012500
-  [Covert] Power preserved: 0.965000 → 1.252426 → 0.965000
-  [Covert] Power preserved: 1.013750 → 1.278869 → 1.013750
-  [Covert] Power preserved: 1.001250 → 1.290148 → 1.001250
-  [Covert] Power preserved: 0.991250 → 1.264076 → 0.991250
-  [Covert] Power preserved: 1.032500 → 1.342234 → 1.032500
-  [Covert] Power preserved: 1.002500 → 1.262042 → 1.002500
-  [Covert] Power preserved: 1.008750 → 1.285836 → 1.008750
-  [Covert] Power preserved: 0.985000 → 1.314253 → 0.985000
-  [Covert] Power preserved: 1.013750 → 1.298388 → 1.013750
-  [Covert] Power preserved: 0.983750 → 1.307929 → 0.983750
-  [Covert] Power preserved: 0.982500 → 1.356369 → 0.982500
-  [Covert] Power preserved: 1.018750 → 1.323565 → 1.018750
-  [Covert] Power preserved: 1.026250 → 1.278240 → 1.026250
-  [Covert] Power preserved: 0.982500 → 1.238092 → 0.982500
-  [Covert] Power preserved: 1.035000 → 1.297330 → 1.035000
-  [Covert] Power preserved: 1.015000 → 1.328025 → 1.015000
-  [Covert] Power preserved: 0.943750 → 1.271687 → 0.943750
-  [Covert] Power preserved: 1.000000 → 1.298580 → 1.000000
-  [Covert] Power preserved: 0.968750 → 1.289638 → 0.968750
-  [Covert] Power preserved: 0.968750 → 1.300792 → 0.968750
-  [Covert] Power preserved: 0.996250 → 1.264157 → 0.996250
-  [Covert] Power preserved: 1.006250 → 1.268736 → 1.006250
-  [Covert] Power preserved: 0.986250 → 1.256946 → 0.986250
-  [Covert] Power preserved: 0.976250 → 1.305503 → 0.976250
-  [Covert] Power preserved: 0.997500 → 1.305762 → 0.997500
-  [Covert] Power preserved: 1.036250 → 1.330725 → 1.036250
-  [Covert] Power preserved: 0.983750 → 1.329734 → 0.983750
-  [Covert] Power preserved: 0.986250 → 1.315503 → 0.986250
+[GPU] Using GPU:0 -> PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')
+
+[Phase 1] Loading dataset from dataset/dataset_samples1500_sats12.pkl...
+✓ Dataset loaded from disk
+
+[Phase 1] Initializing ISAC System...
+[ISAC] Using TR 38.811 DenseUrban (NTN)
+[ISAC] System initialized successfully
+
+=== DATA VALIDATION ===
+Benign samples: 1500
+Attack samples: 1500
+Attack samples with emitter locations: 1500
+Power ratio (attack/benign): 0.5043
+⚠️ WARNING: Power ratio too low - dataset may be biased!
+
+[Phase 2] Feature extraction and split...
+
+[Feature] Extracting features (GPU)...
+[Feature] Creating constellation-based groups...
+✓ Found 35 unique satellite constellations
+✓ Train groups: 28
+✓ Test groups: 7
+✓ No group overlap — proper split! 🎯
+✓ Train: 2526 samples
+✓ Test: 474 samples
+
+[Phase 3] Training detector model...
+
+[Model] Building H100-optimized dual-input CNN...
+
+=== DATASET DIAGNOSTICS ===
+Train set: 2526 samples
+Test set:  474 samples
+Batch size: 64
+Xs_tr shape: (2526, 64, 64, 1)
+Xr_tr shape: (2526, 8, 8, 3)
+Xs_te shape: (474, 64, 64, 1)
+Xr_te shape: (474, 8, 8, 3)
+
+[Model] Training for 30 epochs...
+Epoch 1/30
+39/39 [==============================] - ETA: 0s - loss: 0.5875 - accuracy: 0.9018 - auc: 0.9657
+Epoch 1: val_accuracy improved from -inf to 0.54430, saving model to model/best_model.keras
+39/39 [==============================] - 15s 375ms/step - loss: 0.5875 - accuracy: 0.9018 - auc: 0.9657 - val_loss: 1.1056 - val_accuracy: 0.5443 - val_auc: 0.9999
+Epoch 2/30
+39/39 [==============================] - ETA: 0s - loss: 0.4083 - accuracy: 0.9499 - auc: 0.9882
+Epoch 2: val_accuracy did not improve from 0.54430
+39/39 [==============================] - 0s 4ms/step - loss: 0.4083 - accuracy: 0.9499 - auc: 0.9882 - val_loss: 1.1030 - val_accuracy: 0.5443 - val_auc: 1.0000
+Epoch 3/30
+39/39 [==============================] - ETA: 0s - loss: 0.3116 - accuracy: 0.9756 - auc: 0.9981
+Epoch 3: val_accuracy did not improve from 0.54430
+39/39 [==============================] - 0s 4ms/step - loss: 0.3116 - accuracy: 0.9756 - auc: 0.9981 - val_loss: 0.6977 - val_accuracy: 0.5443 - val_auc: 1.0000
+Epoch 4/30
+39/39 [==============================] - ETA: 0s - loss: 0.2358 - accuracy: 0.9976 - auc: 1.0000
+Epoch 4: val_accuracy improved from 0.54430 to 0.99156, saving model to model/best_model.keras
+39/39 [==============================] - 0s 9ms/step - loss: 0.2358 - accuracy: 0.9976 - auc: 1.0000 - val_loss: 0.3844 - val_accuracy: 0.9916 - val_auc: 1.0000
+Epoch 5/30
+39/39 [==============================] - ETA: 0s - loss: 0.2047 - accuracy: 0.9992 - auc: 1.0000
+Epoch 5: val_accuracy improved from 0.99156 to 0.99789, saving model to model/best_model.keras
+39/39 [==============================] - 0s 8ms/step - loss: 0.2047 - accuracy: 0.9992 - auc: 1.0000 - val_loss: 0.2990 - val_accuracy: 0.9979 - val_auc: 1.0000
+Epoch 6/30
+39/39 [==============================] - ETA: 0s - loss: 0.1812 - accuracy: 1.0000 - auc: 1.0000
+Epoch 6: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.1812 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.2881 - val_accuracy: 0.9895 - val_auc: 1.0000
+Epoch 7/30
+39/39 [==============================] - ETA: 0s - loss: 0.1617 - accuracy: 1.0000 - auc: 1.0000
+Epoch 7: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.1617 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.2924 - val_accuracy: 0.9768 - val_auc: 1.0000
+Epoch 8/30
+39/39 [==============================] - ETA: 0s - loss: 0.1431 - accuracy: 1.0000 - auc: 1.0000
+Epoch 8: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.1431 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.3703 - val_accuracy: 0.8755 - val_auc: 1.0000
+Epoch 9/30
+39/39 [==============================] - ETA: 0s - loss: 0.1269 - accuracy: 1.0000 - auc: 1.0000
+Epoch 9: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.1269 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.3261 - val_accuracy: 0.8987 - val_auc: 1.0000
+Epoch 10/30
+39/39 [==============================] - ETA: 0s - loss: 0.1126 - accuracy: 1.0000 - auc: 1.0000
+Epoch 10: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.1126 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.3754 - val_accuracy: 0.8523 - val_auc: 1.0000
+Epoch 11/30
+39/39 [==============================] - ETA: 0s - loss: 0.0991 - accuracy: 1.0000 - auc: 1.0000
+Epoch 11: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.0991 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.2619 - val_accuracy: 0.9177 - val_auc: 1.0000
+Epoch 12/30
+39/39 [==============================] - ETA: 0s - loss: 0.0875 - accuracy: 1.0000 - auc: 1.0000
+Epoch 12: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.0875 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.2492 - val_accuracy: 0.9241 - val_auc: 1.0000
+Epoch 13/30
+39/39 [==============================] - ETA: 0s - loss: 0.0781 - accuracy: 0.9996 - auc: 1.0000
+Epoch 13: val_accuracy did not improve from 0.99789
+39/39 [==============================] - 0s 4ms/step - loss: 0.0781 - accuracy: 0.9996 - auc: 1.0000 - val_loss: 0.2197 - val_accuracy: 0.9599 - val_auc: 1.0000
+Epoch 14/30
+39/39 [==============================] - ETA: 0s - loss: 0.0685 - accuracy: 1.0000 - auc: 1.0000
+Epoch 14: val_accuracy improved from 0.99789 to 1.00000, saving model to model/best_model.keras
+39/39 [==============================] - 0s 7ms/step - loss: 0.0685 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0969 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 15/30
+39/39 [==============================] - ETA: 0s - loss: 0.0606 - accuracy: 1.0000 - auc: 1.0000
+Epoch 15: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0606 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0634 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 16/30
+39/39 [==============================] - ETA: 0s - loss: 0.0535 - accuracy: 1.0000 - auc: 1.0000
+Epoch 16: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0535 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0510 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 17/30
+39/39 [==============================] - ETA: 0s - loss: 0.0474 - accuracy: 1.0000 - auc: 1.0000
+Epoch 17: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0474 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0445 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 18/30
+39/39 [==============================] - ETA: 0s - loss: 0.0420 - accuracy: 1.0000 - auc: 1.0000
+Epoch 18: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0420 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0394 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 19/30
+39/39 [==============================] - ETA: 0s - loss: 0.0372 - accuracy: 1.0000 - auc: 1.0000
+Epoch 19: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0372 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0350 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 20/30
+39/39 [==============================] - ETA: 0s - loss: 0.0331 - accuracy: 1.0000 - auc: 1.0000
+Epoch 20: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0331 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0311 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 21/30
+39/39 [==============================] - ETA: 0s - loss: 0.0295 - accuracy: 1.0000 - auc: 1.0000
+Epoch 21: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0295 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0278 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 22/30
+39/39 [==============================] - ETA: 0s - loss: 0.0264 - accuracy: 1.0000 - auc: 1.0000
+Epoch 22: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0264 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0248 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 23/30
+39/39 [==============================] - ETA: 0s - loss: 0.0237 - accuracy: 1.0000 - auc: 1.0000
+Epoch 23: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0237 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0223 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 24/30
+39/39 [==============================] - ETA: 0s - loss: 0.0213 - accuracy: 1.0000 - auc: 1.0000
+Epoch 24: val_accuracy did not improve from 1.00000
+39/39 [==============================] - 0s 4ms/step - loss: 0.0213 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0201 - val_accuracy: 1.0000 - val_auc: 1.0000
+Epoch 24: early stopping
+Restoring model weights from the end of the best epoch: 14.
+
+=== TRAINING SUMMARY ===
+Best epoch: 2
+Best val_auc: 1.0000
+Final train_acc: 1.0000
+
+[Phase 4] Evaluating detector...
+
+[Eval] Evaluating on test set...
+Test Results → Loss: 0.0969 | Acc: 1.0000 | AUC: 1.0000
+
+=== THRESHOLD TUNING ===
+Default threshold (0.5): F1 = 1.0000
+Optimized threshold: 0.5014
+  Best F1 score: 1.0000
+  Precision: 1.0000
+  Recall: 1.0000
+
+[Phase 5] Running TDoA localization...
+
+=== PHASE 8: TDoA-BASED LOCALIZATION ===
+Processing true positives...
+  Sample 758 | GT [ 88616.98677975 -22139.48005346] | EST [ 88629.65911159 -22100.39340885] | Error=41.09 m
+  Sample 779 | GT [147241.05455534 139076.8804124 ] | EST [147259.8917532  139081.82560642] | Error=19.48 m
+  Sample 793 | GT [137507.29493754 -37489.30621383] | EST [137495.10311781 -37500.37850194] | Error=16.47 m
+
+=== TDoA Localization Results ===
+Median Error: 44.04 m
+Mean Error  : 1072.47 m
+90th Perc.  : 148.94 m
+Total samples: 122
+
+=== CRLB Analysis ===
+System timing resolution: 8.14 ns
+Assumed timing error (σ_t): 9.77 ns
+Equivalent range error (σ_d): 2.93 m
+Mean CRLB: 1.45 m
+Median CRLB: 1.44 m
+Achieved median error: 44.04 m
+Ratio (achieved/CRLB): 30.60×
+Efficiency: 3.3% of the CRLB
+✓ CRLB analysis saved to result/crlb_values.csv
+✓ Localization errors saved to result/localization_errors.txt
+
+[Phase 6] Generating plots...
+
+=== GENERATING PAPER PLOTS ===
+✓ ROC curve saved to result/1_roc_curve.pdf
+✓ Precision-Recall curve saved to result/2_precision_recall_curve.pdf
+✓ Confusion Matrix saved to result/3_confusion_matrix.pdf
+✓ Training History saved to result/5_training_history.pdf
+
+=== CALIBRATION METRICS ===
+Brier Score: 0.0054
+ECE (Expected Calibration Error): 0.2072
+✓ Calibration curve saved
+✓ Power Spectrum saved to result/6_power_spectrum.pdf
+✓ F1 vs Threshold saved to result/7_f1_vs_threshold.pdf
+✓ Spectrogram Examples saved to result/9_spectrogram_examples.pdf
+✓ Localization CDF saved to result/4_localization_cdf.pdf
+✓ Localization Histogram saved to result/8_localization_histogram.pdf
+✓ Satellite Geometry saved to result/10_satellite_geometry.pdf
+✓ All plots generated successfully
+
+============================================================
+SIMULATION COMPLETE - SUMMARY
+============================================================
+Dataset: 3000 samples (1500 per class)
+Model: Dual-Input CNN (saved to model/)
+Results: All plots saved to result/
+Best Threshold: 0.5014 (F1=1.0000)
+Localization: Median Error = 44.04 m, 90th = 148.94 m
+============================================================
+✓ Pipeline execution completed successfully
