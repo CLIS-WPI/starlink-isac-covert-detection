@@ -114,6 +114,10 @@ def find_optimal_temperature(model, Xs_val, Xr_val, y_val, max_iter=100):
     val_ds = val_ds.batch(64).prefetch(tf.data.AUTOTUNE)
     
     val_logits = model.predict(val_ds, verbose=0)
+    
+    # ✅ FIX: Flatten logits to match y_val shape
+    val_logits = val_logits.ravel()  # Convert (253, 1) to (253,)
+    
     y_val_tensor = tf.constant(y_val, dtype=tf.float32)
     
     # Initialize temperature

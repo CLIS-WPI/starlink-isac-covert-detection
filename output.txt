@@ -1,121 +1,0 @@
-✓ Directory ensured: dataset/
-✓ Directory ensured: model/
-✓ Directory ensured: result/
-[GPU] Using GPU:0 -> PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')
-
-[Phase 1] Loading dataset from dataset/dataset_samples1500_sats12.pkl...
-✓ Dataset loaded from disk
-
-[Phase 1] Initializing ISAC System...
-[ISAC] Using TR 38.811 DenseUrban (NTN)
-[ISAC] System initialized successfully
-
-=== DATA VALIDATION ===
-Benign samples: 1500
-Attack samples: 1500
-Attack samples with emitter locations: 1500
-Power ratio (attack/benign): 0.5043
-⚠️ WARNING: Power ratio too low - dataset may be biased!
-
-[Phase 2] Feature extraction and split...
-
-[Feature] Extracting features (GPU)...
-[Feature] Creating constellation-based groups...
-✓ Found 35 unique satellite constellations
-✓ Train groups: 28
-✓ Test groups: 7
-✓ No group overlap — proper split! 🎯
-✓ Train: 2526 samples
-✓ Test: 474 samples
-
-[Phase 3] Training detector model...
-
-[Model] Building H100-optimized dual-input CNN...
-
-=== DATA SPLIT FOR CALIBRATION ===
-Train set (for training): 2273 samples
-Val set (for calibration): 253 samples
-Test set (final eval): 474 samples
-
-[Model] Training for 30 epochs...
-Epoch 1/30
-35/35 [==============================] - ETA: 0s - loss: 0.5849 - accuracy: 0.8549 - auc: 0.9625
-Epoch 1: val_accuracy improved from -inf to 0.54430, saving model to model/best_model.keras
-35/35 [==============================] - 15s 417ms/step - loss: 0.5849 - accuracy: 0.8549 - auc: 0.9625 - val_loss: 1.2215 - val_accuracy: 0.5443 - val_auc: 0.9976
-Epoch 2/30
-35/35 [==============================] - ETA: 0s - loss: 0.4150 - accuracy: 0.9455 - auc: 0.9866
-Epoch 2: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.4150 - accuracy: 0.9455 - auc: 0.9866 - val_loss: 1.5809 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 3/30
-35/35 [==============================] - ETA: 0s - loss: 0.3377 - accuracy: 0.9634 - auc: 0.9957
-Epoch 3: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.3377 - accuracy: 0.9634 - auc: 0.9957 - val_loss: 1.8898 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 4/30
-35/35 [==============================] - ETA: 0s - loss: 0.2590 - accuracy: 0.9902 - auc: 0.9994
-Epoch 4: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.2590 - accuracy: 0.9902 - auc: 0.9994 - val_loss: 1.1814 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 5/30
-35/35 [==============================] - ETA: 0s - loss: 0.2168 - accuracy: 0.9991 - auc: 1.0000
-Epoch 5: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.2168 - accuracy: 0.9991 - auc: 1.0000 - val_loss: 0.7334 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 6/30
-35/35 [==============================] - ETA: 0s - loss: 0.1919 - accuracy: 1.0000 - auc: 1.0000
-Epoch 6: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.1919 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 1.0423 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 7/30
-35/35 [==============================] - ETA: 0s - loss: 0.1736 - accuracy: 0.9996 - auc: 1.0000
-Epoch 7: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.1736 - accuracy: 0.9996 - auc: 1.0000 - val_loss: 1.1734 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 8/30
-35/35 [==============================] - ETA: 0s - loss: 0.1553 - accuracy: 1.0000 - auc: 1.0000
-Epoch 8: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.1553 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 1.1948 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 9/30
-35/35 [==============================] - ETA: 0s - loss: 0.1391 - accuracy: 1.0000 - auc: 1.0000
-Epoch 9: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.1391 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 1.4964 - val_accuracy: 0.5443 - val_auc: 0.9977
-Epoch 10/30
-35/35 [==============================] - ETA: 0s - loss: 0.1245 - accuracy: 1.0000 - auc: 1.0000
-Epoch 10: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.1245 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 1.6258 - val_accuracy: 0.5443 - val_auc: 0.9977
-Epoch 11/30
-35/35 [==============================] - ETA: 0s - loss: 0.1113 - accuracy: 1.0000 - auc: 1.0000
-Epoch 11: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.1113 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 1.4811 - val_accuracy: 0.5443 - val_auc: 0.9977
-Epoch 11: early stopping
-Restoring model weights from the end of the best epoch: 1.
-
-=== TRAINING SUMMARY ===
-Best epoch: 3
-Best val_auc: 1.0000
-Final train_acc: 1.0000
-
-[Calibration] Finding optimal temperature...
-Traceback (most recent call last):
-  File "/workspace/main.py", line 181, in <module>
-    main()
-  File "/workspace/main.py", line 104, in main
-    model, hist, temperature = train_detector(Xs_tr, Xr_tr, y_tr, Xs_te, Xr_te, y_te)
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/workspace/model/detector.py", line 243, in train_detector
-    temperature = find_optimal_temperature(model, Xs_val, Xr_val, y_val)
-                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/workspace/model/detector.py", line 135, in find_optimal_temperature
-    optimizer.minimize(compute_loss, var_list=[temperature])
-  File "/usr/local/lib/python3.12/dist-packages/tf_keras/src/optimizers/optimizer.py", line 620, in minimize
-    grads_and_vars = self.compute_gradients(loss, var_list, tape)
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/dist-packages/tf_keras/src/optimizers/optimizer.py", line 276, in compute_gradients
-    loss = loss()
-           ^^^^^^
-  File "/workspace/model/detector.py", line 125, in compute_loss
-    tf.keras.losses.binary_crossentropy(
-  File "/usr/local/lib/python3.12/dist-packages/tensorflow/python/util/traceback_utils.py", line 153, in error_handler
-    raise e.with_traceback(filtered_tb) from None
-  File "/usr/local/lib/python3.12/dist-packages/tf_keras/src/losses.py", line 2532, in binary_crossentropy
-    backend.binary_crossentropy(y_true, y_pred, from_logits=from_logits),
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/dist-packages/tf_keras/src/backend.py", line 5824, in binary_crossentropy
-    return tf.nn.sigmoid_cross_entropy_with_logits(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ValueError: `logits` and `labels` must have the same shape, received ((253, 1) vs (253,)).
