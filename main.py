@@ -7,6 +7,7 @@
 import os
 import pickle
 import numpy as np
+import model
 import tensorflow as tf
 
 # Configuration
@@ -100,11 +101,11 @@ def main():
     
     # ===== Phase 4: Model Training =====
     print("\n[Phase 3] Training detector model...")
-    model, hist = train_detector(Xs_tr, Xr_tr, y_tr, Xs_te, Xr_te, y_te)
+    model, hist, temperature = train_detector(Xs_tr, Xr_tr, y_tr, Xs_te, Xr_te, y_te)
     
     # ===== Phase 5: Model Evaluation =====
     print("\n[Phase 4] Evaluating detector...")
-    y_prob, best_thr, f1_scores, t = evaluate_detector(model, Xs_te, Xr_te, y_te)
+    y_prob, best_thr, f1_scores, t = evaluate_detector(model, Xs_te, Xr_te, y_te, temperature)
     
     # Binary predictions using best threshold
     y_hat = (y_prob > best_thr).astype(int)
