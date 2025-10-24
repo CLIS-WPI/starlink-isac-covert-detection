@@ -8,19 +8,19 @@ from scipy.optimize import least_squares
 from config.settings import ABLATION_CONFIG
 
 
-def gcc_phat(x, y, upsample_factor=16, beta=0.85, use_hann=True):  # ✅ OPTIMIZED
+def gcc_phat(x, y, upsample_factor=32, beta=0.9, use_hann=True):
     """
-    GCC-PHAT with OPTIMIZED parameters for real-world TDoA.
+    GCC-PHAT optimized for NTN satellite TDoA.
     
-    CRITICAL CHANGES:
-    - Reduced upsample_factor: 128 → 16 (prevents interpolation artifacts)
-    - Optimized beta: 0.7 → 0.85 (better for high SNR)
-    - Added pre-filtering
+    OPTIMIZED PARAMETERS:
+    - upsample_factor: 32 (good balance)
+    - beta: 0.9 (closer to pure PHAT for robustness)
+    - NO pre-filtering (preserves signal integrity)
     
     Args:
         x, y: Complex baseband signals
-        upsample_factor: 16 is optimal (balance between resolution & stability)
-        beta: 0.85 for high-SNR covert signals
+        upsample_factor: 32 for good resolution
+        beta: 0.9 for robust peak detection
         use_hann: Apply Hann window
     
     Returns:
@@ -29,19 +29,12 @@ def gcc_phat(x, y, upsample_factor=16, beta=0.85, use_hann=True):  # ✅ OPTIMIZ
     x = np.asarray(x, dtype=np.complex64)
     y = np.asarray(y, dtype=np.complex64)
     
-    # ✅ NEW: Pre-filter to remove DC and very low frequencies
-    if len(x) > 100:
-        from scipy import signal as sp_signal
-        b, a = sp_signal.butter(2, 0.01, btype='high')
-        x = sp_signal.filtfilt(b, a, x)
-        y = sp_signal.filtfilt(b, a, y)
-    
     Lx, Ly = len(x), len(y)
     n_lin = Lx + Ly - 1
     n_fft = 1 << (n_lin - 1).bit_length()
     n_fft_up = n_fft * upsample_factor
     
-    # Apply Hann window
+    # Apply Hann window (reduces spectral leakage)
     if use_hann:
         wx = np.hanning(Lx).astype(np.float32)
         wy = np.hanning(Ly).astype(np.float32)
@@ -53,7 +46,7 @@ def gcc_phat(x, y, upsample_factor=16, beta=0.85, use_hann=True):  # ✅ OPTIMIZ
     Y = np.fft.fft(y, n_fft)
     R = X * np.conj(Y)
     
-    # GCC-β weighting
+    # GCC-β weighting (closer to PHAT)
     mag = np.abs(R) + 1e-12
     R = R / (mag ** beta)
     
@@ -115,7 +108,7 @@ def trilateration_2d_wls(tdoa_diffs, pairs, weights):
 
 def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
     """
-    OPTIMIZED TDoA estimation with robust outlier rejection.
+    TDoA localization with SIMPLE robust estimation.
     """
     sat_data = dataset.get('satellite_receptions', None)
     if sat_data is None:
@@ -147,13 +140,12 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
     
     c0 = 3e8
     Fs = float(dataset.get('sampling_rate', isac_system.SAMPLING_RATE))
-    upsampling_factor = 16  # ✅ OPTIMIZED
+    upsampling_factor = 32
     
     # Compute TOA per satellite
     toas = []
     positions = []
     corr_weights = []
-    peak_sharpness = []  # ✅ NEW: Track correlation peak quality
     
     for s in sats:
         pos = s['position']
@@ -168,32 +160,22 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
         
         # GCC-PHAT correlation
         corr = gcc_phat(sig, re, upsample_factor=upsampling_factor, 
-                       beta=0.85, use_hann=True)  # ✅ OPTIMIZED
+                       beta=0.9, use_hann=True)
         center = len(corr) // 2
         k0 = int(np.argmax(np.abs(corr)))
-        
-        # ✅ NEW: Measure peak sharpness
-        peak_val = np.abs(corr[k0])
-        noise_floor = np.median(np.abs(corr))
-        sharpness = peak_val / (noise_floor + 1e-12)
-        peak_sharpness.append(sharpness)
         
         # Parabolic interpolation
         if 0 < k0 < len(corr) - 1:
             y1, y2, y3 = np.abs(corr[k0-1]), np.abs(corr[k0]), np.abs(corr[k0+1])
             den = (y1 - 2*y2 + y3)
             delta = 0.0 if den == 0 else 0.5*(y1 - y3)/den
-            curv = abs(den)
             
-            # ✅ IMPROVED: Weight based on peak sharpness + curvature
-            weight = (max(curv, 1e-3) * sharpness 
-                     if ABLATION_CONFIG.get('use_curvature_weights', True) 
-                     else 1.0)
+            # Simple curvature-based weight
+            curv = abs(den)
+            weight = max(curv, 1e-3) if ABLATION_CONFIG.get('use_curvature_weights', True) else 1.0
         else:
             delta = 0.0
-            weight = (1e-3 
-                     if ABLATION_CONFIG.get('use_curvature_weights', True) 
-                     else 1.0)
+            weight = 1e-3 if ABLATION_CONFIG.get('use_curvature_weights', True) else 1.0
         
         # Convert to time
         d_samp = ((k0 - center) + delta) / upsampling_factor
@@ -206,33 +188,27 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
     
     toas = np.array(toas)
     corr_weights = np.array(corr_weights)
-    peak_sharpness = np.array(peak_sharpness)
-    
-    # ✅ NEW: Outlier rejection based on peak sharpness
-    sharpness_threshold = np.median(peak_sharpness) * 0.3
-    valid_mask = peak_sharpness > sharpness_threshold
-    
-    if np.sum(valid_mask) < 3:
-        valid_mask = np.ones_like(valid_mask, dtype=bool)  # Keep all if too few
-    
-    # Filter based on valid satellites
-    toas = toas[valid_mask]
-    positions_filtered = [positions[i] for i in range(len(positions)) if valid_mask[i]]
-    corr_weights = corr_weights[valid_mask]
     
     # Choose reference: earliest arrival
     ref_idx_num = int(np.argmin(toas))
     toa_ref = float(toas[ref_idx_num])
-    ref_pos = positions_filtered[ref_idx_num]
+    ref_pos = positions[ref_idx_num]
     
     # Build TDoA differences
     tdoa_diffs = []
     pairs = []
     weights = []
-    for i, (toa_i, pos_i, w) in enumerate(zip(toas, positions_filtered, corr_weights)):
+    for i, (toa_i, pos_i, w) in enumerate(zip(toas, positions, corr_weights)):
         if i == ref_idx_num:
             continue
         dd = (float(toa_i) - toa_ref) * c0
+        
+        # ✅ SANITY CHECK: Reject obviously wrong TDoAs
+        # Max distance between satellites in constellation ~500 km
+        # So TDoA difference should be < 500 km
+        if abs(dd) > 500e3:
+            continue  # Skip this measurement
+        
         tdoa_diffs.append(dd)
         pairs.append((ref_pos, pos_i))
         weights.append(w)
@@ -240,7 +216,7 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
     if len(tdoa_diffs) < 2:
         return None, None
     
-    # ✅ IMPROVED: Better weight normalization
+    # Normalize weights
     weights = np.array(weights)
     weights = weights / (np.sum(weights) + 1e-12)
     weights = np.clip(weights, 1e-3, 1.0)
@@ -254,6 +230,11 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
     # Ground truth
     gt = dataset['emitter_locations'][sample_idx]
     if gt is None:
+        return None, None
+    
+    # ✅ FINAL SANITY CHECK: Reject if estimate is too far from Earth
+    # Emitters should be within ±200 km from origin
+    if np.linalg.norm(est[:2]) > 200e3:
         return None, None
     
     return est, np.array(gt)
