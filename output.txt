@@ -1,208 +1,0 @@
-✓ Directory ensured: dataset/
-✓ Directory ensured: model/
-✓ Directory ensured: result/
-[GPU] Using GPU:0 -> PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')
-
-[Phase 1] Loading dataset from dataset/dataset_samples1500_sats12.pkl...
-✓ Dataset loaded from disk
-
-[Phase 1] Initializing ISAC System...
-[ISAC] Using TR 38.811 DenseUrban (NTN)
-[ISAC] System initialized successfully
-
-=== DATA VALIDATION ===
-Benign samples: 1500
-Attack samples: 1500
-Attack samples with emitter locations: 1500
-Power ratio (attack/benign): 0.5043
-⚠️ WARNING: Power ratio too low - dataset may be biased!
-
-[Phase 2] Feature extraction and split...
-
-[Feature] Extracting features (GPU)...
-[Feature] Creating constellation-based groups...
-✓ Found 35 unique satellite constellations
-✓ Train groups: 28
-✓ Test groups: 7
-✓ No group overlap — proper split! 🎯
-✓ Train: 2526 samples
-✓ Test: 474 samples
-
-[Phase 3] Training detector model...
-
-[Model] Building H100-optimized dual-input CNN...
-
-=== DATA SPLIT FOR CALIBRATION ===
-Train set (for training): 2273 samples
-Val set (for calibration): 253 samples
-Test set (final eval): 474 samples
-
-[Model] Training for 30 epochs...
-Epoch 1/30
-35/35 [==============================] - ETA: 0s - loss: 0.5831 - accuracy: 0.8545 - auc: 0.9647
-Epoch 1: val_accuracy improved from -inf to 0.54430, saving model to model/best_model.keras
-35/35 [==============================] - 14s 408ms/step - loss: 0.5831 - accuracy: 0.8545 - auc: 0.9647 - val_loss: 1.3795 - val_accuracy: 0.5443 - val_auc: 0.9951
-Epoch 2/30
-35/35 [==============================] - ETA: 0s - loss: 0.4200 - accuracy: 0.9429 - auc: 0.9859
-Epoch 2: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.4200 - accuracy: 0.9429 - auc: 0.9859 - val_loss: 1.6474 - val_accuracy: 0.5443 - val_auc: 0.9992
-Epoch 3/30
-35/35 [==============================] - ETA: 0s - loss: 0.3722 - accuracy: 0.9500 - auc: 0.9906
-Epoch 3: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.3722 - accuracy: 0.9500 - auc: 0.9906 - val_loss: 1.8549 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 4/30
-35/35 [==============================] - ETA: 0s - loss: 0.2847 - accuracy: 0.9808 - auc: 0.9979
-Epoch 4: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.2847 - accuracy: 0.9808 - auc: 0.9979 - val_loss: 1.3524 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 5/30
-35/35 [==============================] - ETA: 0s - loss: 0.2217 - accuracy: 0.9969 - auc: 1.0000
-Epoch 5: val_accuracy did not improve from 0.54430
-35/35 [==============================] - 0s 4ms/step - loss: 0.2217 - accuracy: 0.9969 - auc: 1.0000 - val_loss: 0.7865 - val_accuracy: 0.5443 - val_auc: 1.0000
-Epoch 6/30
-35/35 [==============================] - ETA: 0s - loss: 0.1937 - accuracy: 0.9991 - auc: 1.0000
-Epoch 6: val_accuracy improved from 0.54430 to 0.98945, saving model to model/best_model.keras
-35/35 [==============================] - 0s 9ms/step - loss: 0.1937 - accuracy: 0.9991 - auc: 1.0000 - val_loss: 0.2639 - val_accuracy: 0.9895 - val_auc: 1.0000
-Epoch 7/30
-35/35 [==============================] - ETA: 0s - loss: 0.1727 - accuracy: 1.0000 - auc: 1.0000
-Epoch 7: val_accuracy did not improve from 0.98945
-35/35 [==============================] - 0s 4ms/step - loss: 0.1727 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.2473 - val_accuracy: 0.9768 - val_auc: 1.0000
-Epoch 8/30
-35/35 [==============================] - ETA: 0s - loss: 0.1551 - accuracy: 1.0000 - auc: 1.0000
-Epoch 8: val_accuracy improved from 0.98945 to 0.99578, saving model to model/best_model.keras
-35/35 [==============================] - 0s 9ms/step - loss: 0.1551 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.2021 - val_accuracy: 0.9958 - val_auc: 1.0000
-Epoch 9/30
-35/35 [==============================] - ETA: 0s - loss: 0.1387 - accuracy: 1.0000 - auc: 1.0000
-Epoch 9: val_accuracy did not improve from 0.99578
-35/35 [==============================] - 0s 4ms/step - loss: 0.1387 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.1629 - val_accuracy: 0.9958 - val_auc: 1.0000
-Epoch 10/30
-35/35 [==============================] - ETA: 0s - loss: 0.1242 - accuracy: 1.0000 - auc: 1.0000
-Epoch 10: val_accuracy improved from 0.99578 to 1.00000, saving model to model/best_model.keras
-35/35 [==============================] - 0s 9ms/step - loss: 0.1242 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.1317 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 11/30
-35/35 [==============================] - ETA: 0s - loss: 0.1107 - accuracy: 1.0000 - auc: 1.0000
-Epoch 11: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.1107 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.1196 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 12/30
-35/35 [==============================] - ETA: 0s - loss: 0.0986 - accuracy: 1.0000 - auc: 1.0000
-Epoch 12: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0986 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.1104 - val_accuracy: 0.9979 - val_auc: 1.0000
-Epoch 13/30
-35/35 [==============================] - ETA: 0s - loss: 0.0880 - accuracy: 1.0000 - auc: 1.0000
-Epoch 13: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0880 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0957 - val_accuracy: 0.9979 - val_auc: 1.0000
-Epoch 14/30
-35/35 [==============================] - ETA: 0s - loss: 0.0783 - accuracy: 1.0000 - auc: 1.0000
-Epoch 14: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0783 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0809 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 15/30
-35/35 [==============================] - ETA: 0s - loss: 0.0699 - accuracy: 1.0000 - auc: 1.0000
-Epoch 15: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0699 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0702 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 16/30
-35/35 [==============================] - ETA: 0s - loss: 0.0623 - accuracy: 1.0000 - auc: 1.0000
-Epoch 16: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0623 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0596 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 17/30
-35/35 [==============================] - ETA: 0s - loss: 0.0557 - accuracy: 1.0000 - auc: 1.0000
-Epoch 17: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0557 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0527 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 18/30
-35/35 [==============================] - ETA: 0s - loss: 0.0497 - accuracy: 1.0000 - auc: 1.0000
-Epoch 18: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0497 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0469 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 19/30
-35/35 [==============================] - ETA: 0s - loss: 0.0445 - accuracy: 1.0000 - auc: 1.0000
-Epoch 19: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0445 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0420 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 20/30
-35/35 [==============================] - ETA: 0s - loss: 0.0399 - accuracy: 1.0000 - auc: 1.0000
-Epoch 20: val_accuracy did not improve from 1.00000
-35/35 [==============================] - 0s 4ms/step - loss: 0.0399 - accuracy: 1.0000 - auc: 1.0000 - val_loss: 0.0376 - val_accuracy: 1.0000 - val_auc: 1.0000
-Epoch 20: early stopping
-Restoring model weights from the end of the best epoch: 10.
-
-=== TRAINING SUMMARY ===
-Best epoch: 3
-Best val_auc: 1.0000
-Final train_acc: 1.0000
-
-[Calibration] Finding optimal temperature...
-  Iter 20/100: T=0.8035, Loss=0.0098
-  Iter 40/100: T=0.6298, Loss=0.0045
-  Iter 60/100: T=0.4976, Loss=0.0021
-  Iter 80/100: T=0.4063, Loss=0.0011
-  Iter 100/100: T=0.3427, Loss=0.0007
-✓ Optimal Temperature: 0.3427
-
-[Phase 4] Evaluating detector...
-
-[Eval] Evaluating on test set...
-Test Results → Loss: 0.0002 | Acc: 1.0000 | AUC: 1.0000
-
-=== CALIBRATION METRICS (T=0.3427) ===
-Brier Score: 0.0000
-ECE (Expected Calibration Error): 0.0002
-
-=== THRESHOLD TUNING ===
-Default threshold (0.5): F1 = 1.0000
-Optimized threshold: 0.9815
-  Best F1 score: 1.0000
-  Precision: 1.0000
-  Recall: 1.0000
-
-[Phase 5] Running TDoA localization...
-
-=== PHASE 8: TDoA-BASED LOCALIZATION ===
-Processing true positives...
-  Sample 758 | GT [ 88616.98677975 -22139.48005346] | EST [ 88629.65911159 -22100.39340885] | Error=41.09 m
-  Sample 779 | GT [147241.05455534 139076.8804124 ] | EST [147259.8917532  139081.82560642] | Error=19.48 m
-  Sample 793 | GT [137507.29493754 -37489.30621383] | EST [137495.10311781 -37500.37850194] | Error=16.47 m
-
-=== TDoA Localization Results ===
-Median Error: 44.04 m
-Mean Error  : 1072.47 m
-90th Perc.  : 148.94 m
-Total samples: 122
-
-=== CRLB Analysis ===
-System timing resolution: 8.14 ns
-Assumed timing error (σ_t): 9.77 ns
-Equivalent range error (σ_d): 2.93 m
-Mean CRLB: 1.45 m
-Median CRLB: 1.44 m
-Achieved median error: 44.04 m
-Ratio (achieved/CRLB): 30.60×
-Efficiency: 3.3% of the CRLB
-✓ CRLB analysis saved to result/crlb_values.csv
-✓ Localization errors saved to result/localization_errors.txt
-
-[Phase 6] Generating plots...
-
-=== GENERATING PAPER PLOTS ===
-✓ ROC curve saved to result/1_roc_curve.pdf
-✓ Precision-Recall curve saved to result/2_precision_recall_curve.pdf
-✓ Confusion Matrix saved to result/3_confusion_matrix.pdf
-✓ Training History saved to result/5_training_history.pdf
-
-=== CALIBRATION METRICS ===
-Brier Score: 0.0000
-ECE (Expected Calibration Error): 0.0002
-✓ Calibration curve saved
-✓ Power Spectrum saved to result/6_power_spectrum.pdf
-✓ F1 vs Threshold saved to result/7_f1_vs_threshold.pdf
-✓ Spectrogram Examples saved to result/9_spectrogram_examples.pdf
-✓ Localization CDF saved to result/4_localization_cdf.pdf
-✓ Localization Histogram saved to result/8_localization_histogram.pdf
-✓ Satellite Geometry saved to result/10_satellite_geometry.pdf
-✓ All plots generated successfully
-
-============================================================
-SIMULATION COMPLETE - SUMMARY
-============================================================
-Dataset: 3000 samples (1500 per class)
-Model: Dual-Input CNN (saved to model/)
-Results: All plots saved to result/
-Best Threshold: 0.9815 (F1=1.0000)
-Localization: Median Error = 44.04 m, 90th = 148.94 m
-============================================================
-✓ Pipeline execution completed successfully

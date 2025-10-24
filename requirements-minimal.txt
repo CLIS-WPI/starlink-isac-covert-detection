@@ -7,3 +7,6 @@ pandas
 matplotlib
 scipy
 seaborn
+pytest
+pytest-cov
+pytest-xdist

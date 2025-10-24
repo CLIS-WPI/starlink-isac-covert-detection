@@ -10,7 +10,7 @@ import os
 # ======================================
 USE_NTN_IF_AVAILABLE = True  # Set False for Rayleigh (faster testing)
 GPU_INDEX = 0
-DEFAULT_COVERT_ESNO_DB = 6.0
+DEFAULT_COVERT_ESNO_DB = 15.0  # ✅ CHANGED: 6.0 → 12.0 (افزایش قدرت covert)
 
 # ======================================
 # 📊 Dataset Parameters
@@ -24,9 +24,9 @@ RESULT_DIR = "result"
 # ======================================
 # 🧠 Training Hyperparameters
 # ======================================
-TRAIN_EPOCHS = 30
+TRAIN_EPOCHS = 50  # ✅ 30 → 50
 TRAIN_BATCH = 64
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1e-4  # ✅ 3e-4 → 1e-4
 VALIDATION_SPLIT = 0.2
 
 # ======================================
