@@ -90,10 +90,11 @@ def merge_datasets(datasets):
         datasets: List of dataset dicts from workers
     
     Returns:
-        Merged dataset dictionary
+        dict: Fully merged dataset
     """
     print("\n[Main] Merging datasets...")
-    
+
+    # Initialize merged containers
     merged = {
         'iq_samples': [],
         'csi': [],
@@ -101,36 +102,50 @@ def merge_datasets(datasets):
         'labels': [],
         'emitter_locations': [],
         'satellite_receptions': [],
-        'tx_time_padded': []
+        'tx_time_padded': [],
+        'rx_time_b_full': []
     }
-    
+
+    # === Merge from each worker ===
     for ds in datasets:
         gpu_id = ds.pop('_gpu_id')
         start_idx = ds.pop('_start_idx')
         end_idx = ds.pop('_end_idx')
-        
+
         print(f"  Merging GPU {gpu_id} data (samples {start_idx}-{end_idx})...")
-        
-        # Merge arrays
-        for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded']:
-            if key in ds:
+
+        # Merge all array-like fields (if they exist)
+        for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full']:
+            if key in ds and ds[key] is not None:
                 merged[key].append(ds[key])
-        
-        # Merge lists
-        merged['emitter_locations'].extend(ds['emitter_locations'])
-        merged['satellite_receptions'].extend(ds['satellite_receptions'])
-    
-    # Concatenate arrays
+
+        # Merge list-like fields
+        if 'emitter_locations' in ds:
+            merged['emitter_locations'].extend(ds['emitter_locations'])
+        if 'satellite_receptions' in ds:
+            merged['satellite_receptions'].extend(ds['satellite_receptions'])
+
+    # === Concatenate all numpy arrays safely ===
     print("  Concatenating arrays...")
-    for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded']:
-        merged[key] = np.concatenate(merged[key], axis=0)
-    
-    # Copy metadata from first dataset
-    merged['sampling_rate'] = datasets[0]['sampling_rate']
-    
-    print(f"✓ Merged dataset: {len(merged['labels'])} total samples")
-    
+    for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full']:
+        if len(merged[key]) > 0:
+            try:
+                merged[key] = np.concatenate(merged[key], axis=0)
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to concatenate key '{key}' → {e}")
+                merged[key] = np.array(merged[key], dtype=object)
+        else:
+            merged[key] = np.array([], dtype=np.complex64)
+
+    # === Metadata ===
+    merged['sampling_rate'] = datasets[0].get('sampling_rate', None)
+    total = len(merged['labels']) if 'labels' in merged else 0
+
+    print(f"✓ Merged dataset: {total} total samples")
+    print("✓ Included keys:", list(merged.keys()))
+
     return merged
+
 
 
 def main():

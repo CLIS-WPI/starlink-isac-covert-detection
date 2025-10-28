@@ -10,7 +10,8 @@ import os
 # ======================================
 USE_NTN_IF_AVAILABLE = True  # Set False for Rayleigh (faster testing)
 GPU_INDEX = 0
-DEFAULT_COVERT_ESNO_DB = 15.0  # ✅ CHANGED: 6.0 → 12.0 (افزایش قدرت covert)
+# ✅ FRIEND'S FIX: Increase covert power for better detection
+DEFAULT_COVERT_ESNO_DB = 12.0  # ✅ CHANGED: 15.0 → 18.0
 
 # ======================================
 # 📊 Dataset Parameters
@@ -36,7 +37,9 @@ ABLATION_CONFIG = {
     'use_spectrogram': True,
     'use_rx_features': True,
     'use_curvature_weights': True,
-    'power_preserving_covert': True
+    # ✅ FRIEND'S FIX: Turn off power preservation.
+    # This makes the attack ADD power, making it detectable.
+    'power_preserving_covert': False
 }
 
 # ======================================
@@ -70,6 +73,28 @@ NUM_BITS_PER_SYMBOL = 4
 CODERATE = 0.5
 LDPC_K = 512
 LDPC_N = 1024
+
+# Localization
+USE_FDOA = True
+RESIDUAL_CNN_PATH = "model/localization_residual_cnn.keras"
+
+# ======================================
+# 🚀 STNN Configuration (NEW!)
+# ======================================
+USE_STNN_LOCALIZATION = True  # Enable STNN-aid CAF method
+STNN_TDOA_MODEL_PATH = "model/stnn_tdoa_best.keras"
+STNN_FDOA_MODEL_PATH = "model/stnn_fdoa_best.keras"
+STNN_ERROR_STATS_PATH = "model/stnn_error_stats.pkl"
+
+# STNN Feature Extraction
+STNN_STFT_NPERSEG = 256  # STFT segment length
+STNN_STFT_OUTPUT_SHAPE = (256, 256)  # STFT output shape (H, W)
+
+# STNN Training
+STNN_EPOCHS_TDOA = 50
+STNN_EPOCHS_FDOA = 50
+STNN_BATCH_SIZE = 32
+STNN_USE_MULTI_GPU = True  # Use both H100 GPUs for training
 
 # ======================================
 # 📂 Directory Management

@@ -18,6 +18,8 @@ docker run --gpus all --user root -it \
   covert_l:latest
 
 # Execute pipeline
+python3 generate_dataset_parallel.py
+# Execute main
 python3 main.py
 ```
 

@@ -26,28 +26,28 @@ def build_dual_input_cnn_h100():
     if ABLATION_CONFIG.get('use_spectrogram', True):
         a_in = layers.Input(shape=(64, 64, 1), name="spectrogram")
         a = layers.Conv2D(32, 3, padding='same', activation='relu',
-                         kernel_regularizer=tf.keras.regularizers.l2(0.01))(a_in)  # ✅ 0.001 → 0.01
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001))(a_in)
         a = layers.BatchNormalization()(a)
         a = layers.MaxPooling2D(2)(a)
-        a = layers.Dropout(0.4)(a)  # ✅ 0.25 → 0.4
+        a = layers.Dropout(0.2)(a)
         
         a = layers.Conv2D(64, 3, padding='same', activation='relu',
-                         kernel_regularizer=tf.keras.regularizers.l2(0.01))(a)
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001))(a)
         a = layers.BatchNormalization()(a)
         a = layers.MaxPooling2D(2)(a)
-        a = layers.Dropout(0.4)(a)  # ✅ 0.25 → 0.4
+        a = layers.Dropout(0.2)(a)
         
         a = layers.Conv2D(128, 3, padding='same', activation='relu',
-                         kernel_regularizer=tf.keras.regularizers.l2(0.01))(a)
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001))(a)
         a = layers.BatchNormalization()(a)
         a = layers.MaxPooling2D(2)(a)
-        a = layers.Dropout(0.5)(a)  # ✅ 0.3 → 0.5
+        a = layers.Dropout(0.3)(a)
         
         a = layers.Conv2D(256, 3, padding='same', activation='relu',
-                         kernel_regularizer=tf.keras.regularizers.l2(0.01))(a)
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001))(a)
         a = layers.BatchNormalization()(a)
         a = layers.GlobalAveragePooling2D()(a)
-        a = layers.Dropout(0.5)(a)  # ✅ NEW
+        a = layers.Dropout(0.3)(a)
     else:
         a_in = layers.Input(shape=(64, 64, 1), name="spectrogram")
         a = layers.Flatten()(a_in)
@@ -57,22 +57,22 @@ def build_dual_input_cnn_h100():
     if ABLATION_CONFIG.get('use_rx_features', True):
         b_in = layers.Input(shape=(8, 8, 3), name="rx_features")
         b = layers.Conv2D(32, 3, padding='same', activation='relu',
-                         kernel_regularizer=tf.keras.regularizers.l2(0.01))(b_in)  # ✅ NEW
-        b = layers.BatchNormalization()(b)  # ✅ NEW
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001))(b_in)
+        b = layers.BatchNormalization()(b)
         b = layers.MaxPooling2D(2)(b)
-        b = layers.Dropout(0.3)(b)  # ✅ NEW
+        b = layers.Dropout(0.2)(b)
         
         b = layers.Conv2D(64, 3, padding='same', activation='relu',
-                         kernel_regularizer=tf.keras.regularizers.l2(0.01))(b)
-        b = layers.BatchNormalization()(b)  # ✅ NEW
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001))(b)
+        b = layers.BatchNormalization()(b)
         b = layers.MaxPooling2D(2)(b)
-        b = layers.Dropout(0.3)(b)  # ✅ NEW
+        b = layers.Dropout(0.2)(b)
         
         b = layers.Conv2D(128, 3, padding='same', activation='relu',
-                         kernel_regularizer=tf.keras.regularizers.l2(0.01))(b)
-        b = layers.BatchNormalization()(b)  # ✅ NEW
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001))(b)
+        b = layers.BatchNormalization()(b)
         b = layers.GlobalAveragePooling2D()(b)
-        b = layers.Dropout(0.4)(b)  # ✅ NEW
+        b = layers.Dropout(0.3)(b)
     else:
         b_in = layers.Input(shape=(8, 8, 3), name="rx_features")
         b = layers.Flatten()(b_in)
@@ -81,17 +81,21 @@ def build_dual_input_cnn_h100():
     # Merge and classify
     x = layers.Concatenate()([a, b])
     x = layers.Dense(128, activation='relu',
-                    kernel_regularizer=tf.keras.regularizers.l2(0.01))(x)  # ✅ NEW
-    x = layers.BatchNormalization()(x)  # ✅ NEW
-    x = layers.Dropout(0.6)(x)
+                    kernel_regularizer=tf.keras.regularizers.l2(0.0001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.3)(x)
     
     x = layers.Dense(64, activation='relu',
-                    kernel_regularizer=tf.keras.regularizers.l2(0.01))(x)  # ✅ NEW
-    x = layers.BatchNormalization()(x)  # ✅ NEW
-    x = layers.Dropout(0.5)(x)  # ✅ 0.3 → 0.5
+                    kernel_regularizer=tf.keras.regularizers.l2(0.0001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.3)(x)
     
-    # ✅ Output logits (no sigmoid!)
-    out = layers.Dense(1, dtype='float32', name='logits')(x)
+    # ✅ Output logits with bias initialization for better learning
+    out = layers.Dense(1, 
+                       dtype='float32', 
+                       name='logits',
+                       kernel_initializer='glorot_uniform',
+                       bias_initializer=tf.keras.initializers.Constant(-0.1))(x)
     
     model = Model([a_in, b_in], out)
     
@@ -218,15 +222,15 @@ def train_detector(Xs_tr, Xr_tr, y_tr, Xs_te, Xr_te, y_te):
     cbs = [
         callbacks.ModelCheckpoint(
             filepath=f"{MODEL_DIR}/best_model.keras",
-            monitor='val_accuracy',
+            monitor='val_auc',
             mode='max',
             save_best_only=True,
             verbose=1
         ),
         callbacks.EarlyStopping(
-            monitor='val_accuracy',
+            monitor='val_auc',
             mode='max',
-            patience=10,
+            patience=15,
             min_delta=0.001,
             restore_best_weights=True,
             verbose=1

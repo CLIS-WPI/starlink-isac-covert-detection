@@ -2,6 +2,8 @@
 # 📄 core/dataset_generator.py
 # Purpose: Multi-satellite dataset generation with Path A (detection) and Path B (TDoA)
 # OPTIMIZED: Uses topology cache + power preservation + proper logging
+# UPDATED: Added satellite velocity generation for FDoA
+# FIX:      REVERTED SWAP. Detector trains on Path A (real signal).
 # ======================================
 
 import numpy as np
@@ -68,7 +70,9 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     
     print(f"[Dataset] Generating {total} samples ({num_samples_per_class} per class)...")
     print(f"[Dataset] Satellites: {num_satellites}")
-    print(f"[Dataset] Using {'cached topologies' if isac_system.topology_cache else 'on-the-fly generation'}")
+    # print(f"[Dataset] Using {'cached topologies' if isac_system.topology_cache else 'on-the-fly generation'}")
+    print(f"[Dataset] Using on-the-fly topology generation (CRITICAL FIX for valid geometry)")
+
     
     for idx in range(total):
         i = order[idx]
@@ -77,19 +81,28 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         
         # ===== Generate per-sample satellite constellation =====
         base_positions = []
+        base_velocities = [] # NEW: To store velocities
         
+        def get_random_velocity():
+            """Generates a random LEO velocity vector."""
+            v_mag = 7500.0 + np.random.uniform(-500, 500) # LEO speed ~7.5 km/s
+            v_vec = np.random.randn(3) # Random direction
+            v_vec = v_vec / np.linalg.norm(v_vec) * v_mag
+            return v_vec
+
         if num_satellites == 4:
             # Simple 2×2 grid with altitude variation
-            base_positions = [
+            base_positions_coords = [
                 np.array([0.0, 0.0, 600e3]),
                 np.array([grid_spacing, 0.0, 600e3]),
                 np.array([0.0, grid_spacing, 600e3]),
                 np.array([grid_spacing, grid_spacing, 600e3]),
             ]
             # Add random altitude offsets (±75 km)
-            for j, pos in enumerate(base_positions):
+            for pos in base_positions_coords:
                 altitude_offset = np.random.uniform(-75e3, 75e3)
-                base_positions[j] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
+                base_positions.append(np.array([pos[0], pos[1], pos[2] + altitude_offset]))
+                base_velocities.append(get_random_velocity()) # NEW
         
         elif num_satellites == 12:
             # 3-ring constellation with altitude diversity (Starlink-like)
@@ -106,6 +119,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                 z = np.random.choice(shells, p=shell_weights)
                 z += np.random.uniform(-30e3, 30e3)
                 base_positions.append(np.array([x, y_p, z]))
+                base_velocities.append(get_random_velocity()) # NEW
             
             # Ring 2 (middle, 4 satellites)
             for j in range(4):
@@ -116,6 +130,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                 z = np.random.choice(shells, p=shell_weights)
                 z += np.random.uniform(-40e3, 40e3)
                 base_positions.append(np.array([x, y_p, z]))
+                base_velocities.append(get_random_velocity()) # NEW
             
             # Ring 3 (outer, 4 satellites)
             for j in range(4):
@@ -126,6 +141,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                 z = np.random.choice(shells, p=shell_weights)
                 z += np.random.uniform(-50e3, 50e3)
                 base_positions.append(np.array([x, y_p, z]))
+                base_velocities.append(get_random_velocity()) # NEW
         
         else:
             # Generic grid layout for other satellite counts
@@ -133,11 +149,10 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             for j in range(num_satellites):
                 x = (j % side) * grid_spacing
                 y_p = (j // side) * grid_spacing
-                base_positions.append(np.array([x, y_p, 600e3]))
-            # Add altitude variation
-            for j, pos in enumerate(base_positions):
+                # Add altitude variation
                 altitude_offset = np.random.uniform(-75e3, 75e3)
-                base_positions[j] = np.array([pos[0], pos[1], pos[2] + altitude_offset])
+                base_positions.append(np.array([x, y_p, 600e3 + altitude_offset]))
+                base_velocities.append(get_random_velocity()) # NEW
         
         # Log constellation occasionally (not too verbose)
         if idx % 500 == 0 or idx == 0:
@@ -185,7 +200,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         ])
         max_delay_samp = int(np.ceil((max_distance / c0) * isac_system.SAMPLING_RATE)) + 200
         
-        # ===== Modulate clean transmit signal (Path B for TDoA) =====
+        # ===== Modulate clean transmit signal (Used as base for Path B) =====
         tx_time = isac_system.modulator(tx_grid)
         tx_time_flat = tf.squeeze(tx_time)
         tx_time_padded = tf.pad(
@@ -200,21 +215,47 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         # ===== Multi-satellite reception =====
         sat_rx_list = []
         
-        for sat_idx, sat_pos in enumerate(base_positions[:num_satellites]):
+        # NEW: Iterate over positions and velocities
+        for sat_idx, (sat_pos, sat_vel) in enumerate(zip(base_positions[:num_satellites], base_velocities[:num_satellites])):
+            
             # ===== Generate channel =====
-            # Use cached topology if available (much faster!)
+            
+            # 🛑 CRITICAL FIX: DO NOT USE CACHE. 
+            # The cache loads a RANDOM topology. We MUST use the
+            # sat_pos and sat_vel for THIS satellite.
+            #
             if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
-                if isac_system.topology_cache:
-                    # Use random cached topology
-                    cache_idx = np.random.randint(0, len(isac_system.topology_cache))
-                    isac_system.set_cached_topology(cache_idx)
-                else:
-                    # Generate on-the-fly (slower)
-                    isac_system.set_cached_topology(0)
                 
-                a, tau = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
+                # We MUST generate the topology on the fly using this sample's
+                # specific geometry.
+                
+                # Emitter (user) position:
+                # Use the covert emitter location, or the default user location
+                if emitter_loc is not None:
+                    ut_pos = tf.constant([[emitter_loc]], dtype=tf.float32)
+                else:
+                    ut_pos = tf.constant([[[50e3, 50e3, 0.0]]], dtype=tf.float32) # Default user
+                
+                # Satellite position and velocity
+                bs_pos = tf.constant([[sat_pos]], dtype=tf.float32)
+                bs_vel = tf.constant([[sat_vel]], dtype=tf.float32)
+                ut_vel = tf.zeros_like(ut_pos) # Emitter is stationary
+                
+                try:
+                    # Manually set the topology for the channel model
+                    isac_system.CHANNEL_MODEL.set_topology(ut_pos, bs_pos, ut_vel, bs_vel)
+                    a, tau = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
+                
+                except Exception as e:
+                    # Fallback if topology fails (e.g., sat is below horizon)
+                    # print(f"Warning: Sionna topology failed: {e}. Falling back to Rayleigh.")
+                    a, tau = isac_system.CHANNEL_MODEL(
+                        1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS,
+                        sampling_frequency=isac_system.rg.bandwidth
+                    )
+            
             else:
-                # Rayleigh channel
+                # Rayleigh channel (no topology)
                 a, tau = isac_system.CHANNEL_MODEL(
                     1, 
                     num_time_steps=isac_system.NUM_OFDM_SYMBOLS,
@@ -280,12 +321,13 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             rx_time_cropped = rx_time_padded_channel[:, delay_samp : delay_samp + signal_length]
             rx_grid_cropped = isac_system.demodulator(rx_time_cropped)
             
-            # ===== Path B: Roll clean signal + AWGN (for TDoA) =====
+            # ===== Path B: Clean geometric delay only (for Localization) =====
+            # ❗ No channel effect here — just manual delay + AWGN.
             rx_time_padded_clean_rolled = tf.roll(tx_time_padded, shift=delay_samp, axis=-1)
-            
-            # Add simple AWGN in time domain (same SNR as Path A)
+
+            # Add AWGN (same SNR as Path A)
             try:
-                tx_pow = tf.reduce_mean(tf.abs(tx_time)**2)
+                tx_pow = tf.reduce_mean(tf.abs(tx_time_padded)**2)
                 sigma2_time = tx_pow / esn0
                 std_time = tf.sqrt(tf.cast(sigma2_time / 2.0, tf.float32))
                 noise_padded = tf.complex(
@@ -296,21 +338,39 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             except:
                 # Fallback if power calculation fails
                 rx_time_padded_final = rx_time_padded_clean_rolled
-            
+
+            # --- NEW: Create cropped, demodulated Path B features for detector ---
+            rx_time_b_cropped = rx_time_padded_final[:, delay_samp : delay_samp + signal_length]
+            rx_freq_b = isac_system.demodulator(rx_time_b_cropped)
+            # --- END NEW ---
+
+           
             # Store satellite reception data
             sat_rx_list.append({
                 'satellite_id': sat_idx,
                 'position': sat_pos,
-                'rx_time_padded': np.squeeze(rx_time_padded_final.numpy()),  # Path B (TDoA)
-                'rx_time': np.squeeze(rx_time_cropped.numpy()),              # Path A (Detection)
-                'rx_freq': np.squeeze(rx_grid_cropped.numpy()),              # Path A (Detection)
+                'velocity': sat_vel, # NEW: Added velocity
+                
+                # Path A (Full Channel) - Now used for DETECTOR
+                'rx_time_padded': np.squeeze(rx_time_padded_channel.numpy()), # Full delayed Path A
+                'rx_time': np.squeeze(rx_time_cropped.numpy()),            # Cropped delayed Path A
+                'rx_freq': np.squeeze(rx_grid_cropped.numpy()),            # Cropped demod Path A
+                
+                # Path B (Clean + Noise) - Now used for LOCALIZATION
+                'rx_time_b_full': np.squeeze(rx_time_padded_final.numpy()), # Full delayed Path B
+                'rx_time_b_cropped': np.squeeze(rx_time_b_cropped.numpy()), # Cropped delayed Path B
+                'rx_freq_b': np.squeeze(rx_freq_b.numpy()),           # Cropped demod Path B
+
                 'true_delay_samples': delay_samp,
                 'distance': distance
             })
         
         # Store primary satellite (index 0) for detector features
+        # --- FIX: REVERTED. Detector trains on Path A (real signal) ---
         all_iq.append((i, sat_rx_list[0]['rx_time']))
         all_rxfreq.append((i, sat_rx_list[0]['rx_freq']))
+        # --- END FIX ---
+
         all_sat_recepts.append((i, sat_rx_list))
         
         # ===== Radar echo (independent noise) =====
@@ -357,7 +417,26 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     all_sat_recepts = [x[1] for x in sorted(all_sat_recepts, key=lambda z: z[0])]
     
     print(f"✓ Dataset generation complete: {len(all_labels)} samples")
-    
+
+    # ===== Collect clean Path-B waveforms (for TDoA) =====
+    # ===== Collect and pad clean Path-B waveforms (for TDoA) =====
+    all_rx_time_b_full = []
+    for sat_rx_list in all_sat_recepts:
+        if len(sat_rx_list) > 0:
+            all_rx_time_b_full.append(sat_rx_list[0]['rx_time_b_full'])
+        else:
+            all_rx_time_b_full.append(np.zeros(1, dtype=np.complex64))
+
+    # پیدا کردن طول حداکثر بین تمام سیگنال‌ها
+    max_len_b = max(len(x) for x in all_rx_time_b_full)
+    num_samples = len(all_rx_time_b_full)
+
+    # پد کردن همه‌ی سیگنال‌ها به طول یکنواخت
+    rx_time_b_full_arr = np.zeros((num_samples, max_len_b), dtype=np.complex64)
+    for i, x in enumerate(all_rx_time_b_full):
+        rx_time_b_full_arr[i, :len(x)] = x
+
+    # ===== Return dataset (Path B padded) =====
     return {
         'iq_samples': np.array(all_iq),
         'csi': np.array(all_rxfreq),
@@ -366,5 +445,6 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         'emitter_locations': all_emit,
         'satellite_receptions': all_sat_recepts,
         'sampling_rate': isac_system.SAMPLING_RATE,
-        'tx_time_padded': tx_time_padded_arr  # ✅ Now 2D homogeneous array
+        'tx_time_padded': tx_time_padded_arr,
+        'rx_time_b_full': rx_time_b_full_arr  # ✅ Uniform shape (padded)
     }

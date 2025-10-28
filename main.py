@@ -1,10 +1,14 @@
 # ======================================
-# 📄 main.py
+# Ã°Å¸â€œâ€ž main.py
 # Purpose: Main training pipeline (uses pre-generated dataset)
 # OPTIMIZED: Loads cached dataset instead of regenerating
+# NEW: Added AUC flip check for diagnostics
 # ======================================
 
 import os
+# Set GPU before any TensorFlow imports
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Only use GPU 0
+
 import pickle
 import numpy as np
 import model
@@ -34,6 +38,9 @@ from core.localization import run_tdoa_localization, compute_crlb
 # Model
 from model.detector import train_detector, evaluate_detector
 
+# Metrics
+from sklearn.metrics import roc_auc_score # Import for AUC check
+
 
 def main():
     """Main execution pipeline (training only)."""
@@ -57,7 +64,7 @@ def main():
         print(f"\n[Phase 1] Loading dataset from {dataset_path}...")
         with open(dataset_path, 'rb') as f:
             dataset = pickle.load(f)
-        print("✓ Dataset loaded from disk")
+        print("Ã¢Å“â€œ Dataset loaded from disk")
     else:
         print(f"\n[Phase 1] Dataset not found at {dataset_path}")
         print("Please run: python3 generate_dataset_parallel.py")
@@ -68,6 +75,15 @@ def main():
     print("\n[Phase 1] Initializing ISAC System...")
     isac = ISACSystem()
     
+    # ✅ Display STNN status
+    if hasattr(isac, 'stnn_estimator') and isac.stnn_estimator is not None:
+        print("\n[STNN] Status: ✓ ENABLED")
+        print(f"  → Localization will use hybrid STNN-aid CAF method")
+        print(f"  → Expected speedup: ~10x vs traditional GCC-PHAT")
+    else:
+        print("\n[STNN] Status: ✗ DISABLED (using traditional GCC-PHAT)")
+        print(f"  → To enable: python3 main.py --train-stnn")
+    
     # ===== Data Validation =====
     print("\n=== DATA VALIDATION ===")
     labels = dataset['labels']
@@ -77,6 +93,7 @@ def main():
           f"{sum(1 for loc in dataset['emitter_locations'] if loc is not None)}")
     
     # Power diagnostics
+    # --- FRIEND'S CHECK 1: Ensure power ratio is printed ---
     benign_idx = np.where(labels == 0)[0][:100]
     attack_idx = np.where(labels == 1)[0][:100]
     benign_power = np.mean([
@@ -91,11 +108,12 @@ def main():
     print(f"Power ratio (attack/benign): {power_ratio:.4f}")
     
     if power_ratio < 1.1:
-        print("⚠️ WARNING: Power ratio too low - dataset may be biased!")
+        print("Ã¢Å¡Â Ã¯Â¸Â WARNING: Power ratio too low - dataset may be biased!")
+    # --- END CHECK 1 ---
     
     # ===== Phase 3: Feature Extraction & Split =====
     print("\n[Phase 2] Feature extraction and split...")
-    Xs_tr, Xs_te, Xr_tr, Xr_te, y_tr, y_te, idx_tr, idx_te = (
+    Xs_tr, Xs_te, Xr_tr, Xr_te, Xstft_tr, Xstft_te, y_tr, y_te, idx_tr, idx_te = (
         extract_features_and_split(dataset)
     )
     
@@ -107,6 +125,17 @@ def main():
     print("\n[Phase 4] Evaluating detector...")
     y_prob, best_thr, f1_scores, t = evaluate_detector(model, Xs_te, Xr_te, y_te, temperature)
     
+    # --- FRIEND'S CHECK 2: Check for flipped AUC ---
+    print("\n=== AUC DIAGNOSTICS ===")
+    auc_normal = roc_auc_score(y_te, y_prob)
+    auc_flipped = roc_auc_score(y_te, 1.0 - y_prob)
+    print(f"AUC (Normal): {auc_normal:.4f}")
+    print(f"AUC (Flipped): {auc_flipped:.4f}")
+    if auc_flipped > auc_normal + 0.1:
+        print("Ã°Å¸â€™Â¡ HINT: AUC is likely flipped. Check model output or label definitions.")
+    print("=======================")
+    # --- END CHECK 2 ---
+
     # Binary predictions using best threshold
     y_hat = (y_prob > best_thr).astype(int)
     
@@ -137,16 +166,16 @@ def main():
                 })
                 csv_path = os.path.join(RESULT_DIR, 'crlb_values.csv')
                 df_crlb.to_csv(csv_path, index=False)
-                print(f"✓ CRLB analysis saved to {csv_path}")
+                print(f"Ã¢Å“â€œ CRLB analysis saved to {csv_path}")
             except Exception as e:
-                print(f"⚠️ Could not save CRLB CSV: {e}")
+                print(f"Ã¢Å¡Â Ã¯Â¸Â Could not save CRLB CSV: {e}")
         
         # Save localization errors
         try:
             with open(f"{RESULT_DIR}/localization_errors.txt", "w") as f:
                 for e in loc_errors:
                     f.write(f"{e:.4f}\n")
-            print(f"✓ Localization errors saved to {RESULT_DIR}/localization_errors.txt")
+            print(f"Ã¢Å“â€œ Localization errors saved to {RESULT_DIR}/localization_errors.txt")
         except:
             pass
     
@@ -174,8 +203,41 @@ def main():
         print(f"Localization: Median Error = {med:.2f} m, 90th = {p90:.2f} m")
     
     print("="*60)
-    print("✓ Pipeline execution completed successfully")
+    print("Ã¢Å“â€œ Pipeline execution completed successfully")
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='ISAC Covert Detection & Localization Pipeline')
+    parser.add_argument('--train-stnn', action='store_true', 
+                        help='Train STNN models before main pipeline')
+    parser.add_argument('--stnn-epochs', type=int, default=50,
+                        help='Number of epochs for STNN training')
+    
+    args = parser.parse_args()
+    
+    # ✅ Optional: Train STNN first
+    if args.train_stnn:
+        print("\n" + "="*60)
+        print("STNN TRAINING MODE")
+        print("="*60)
+        
+        from core.train_stnn_localization import main_training_pipeline
+        
+        dataset_path = (
+            f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
+            f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
+        )
+        
+        main_training_pipeline(
+            dataset_path=dataset_path,
+            epochs_tdoa=args.stnn_epochs,
+            epochs_fdoa=args.stnn_epochs,
+            batch_size=32,
+            use_multi_gpu=True
+        )
+        
+        print("\n✓ STNN training complete! Running main pipeline...\n")
+    
     main()

@@ -1,10 +1,11 @@
 # ======================================
-# 📄 core/isac_system.py
+# ðŸ“„ core/isac_system.py
 # Purpose: ISAC System with optimized topology caching
 # OPTIMIZED: Pre-generates 1000+ topologies for reuse
 # ======================================
 
 import numpy as np
+import os
 import tensorflow as tf
 from sionna.phy.mimo import StreamManagement
 from sionna.phy.ofdm import ResourceGrid, OFDMDemodulator, OFDMModulator, ResourceGridMapper
@@ -20,9 +21,9 @@ try:
     from sionna.phy.channel.tr38811 import DenseUrban, Antenna, AntennaArray
     from sionna.phy.channel.tr38811 import utils as tr811_utils
     NTN_MODELS_AVAILABLE = True
-    print("✓ NTN (TR 38.811) models loaded")
+    print("âœ“ NTN (TR 38.811) models loaded")
 except Exception:
-    print("⚠️ NTN not available, using Rayleigh fallback")
+    print("âš ï¸ NTN not available, using Rayleigh fallback")
 
 
 class ISACSystem:
@@ -97,6 +98,10 @@ class ISACSystem:
         # Topology cache
         self.topology_cache = []
         
+        # ✅ NEW: STNN models for fast localization
+        self.stnn_estimator = None
+        self._init_stnn_models()
+        
         print("[ISAC] System initialized successfully")
     
     def _init_channel(self):
@@ -151,11 +156,57 @@ class ISACSystem:
             num_tx_ant=self.NUM_TX_ANT
         )
     
+    def _init_stnn_models(self):
+        """
+        Initialize STNN models for fast TDOA/FDOA estimation.
+        
+        ✅ NEW: Loads trained STNN models from paper's method
+        """
+        from config.settings import (
+            USE_STNN_LOCALIZATION,
+            STNN_TDOA_MODEL_PATH,
+            STNN_FDOA_MODEL_PATH,
+            STNN_ERROR_STATS_PATH
+        )
+        
+        if not USE_STNN_LOCALIZATION:
+            print("[ISAC] STNN localization disabled")
+            return
+        
+        try:
+            import pickle
+            from model.stnn_localization import STNNEstimator
+            
+            # Load STNN estimator
+            self.stnn_estimator = STNNEstimator(
+                tdoa_model_path=STNN_TDOA_MODEL_PATH,
+                fdoa_model_path=STNN_FDOA_MODEL_PATH
+            )
+            
+            # Load error statistics (from validation set)
+            if os.path.exists(STNN_ERROR_STATS_PATH):
+                with open(STNN_ERROR_STATS_PATH, 'rb') as f:
+                    stats = pickle.load(f)
+                
+                self.stnn_estimator.update_error_statistics(
+                    tdoa_std=stats['tdoa_std'],
+                    fdoa_std=stats['fdoa_std']
+                )
+                
+                print(f"[ISAC] ✓ STNN models loaded successfully")
+            else:
+                print(f"[ISAC] ⚠️  STNN error stats not found, using defaults")
+        
+        except Exception as e:
+            print(f"[ISAC] ⚠️  STNN initialization failed: {e}")
+            print("[ISAC] → Falling back to traditional GCC-PHAT")
+            self.stnn_estimator = None
+    
     def precompute_topologies(self, count=1000):
         """
         Pre-generate topology cache for fast reuse.
         
-        ✅ OPTIMIZED: Generate 1000 topologies once (~2 min)
+        âœ… OPTIMIZED: Generate 1000 topologies once (~2 min)
         Instead of generating per-sample (~0.5s each = 25 min total for 3000 samples)
         
         Args:
@@ -196,8 +247,8 @@ class ISACSystem:
                 print(f"  Progress: {i+1}/{count} topologies ({elapsed:.1f}s elapsed, ETA: {eta:.1f}s)")
         
         elapsed = time.time() - start
-        print(f"[ISAC] ✓ Cached {len(self.topology_cache)} topologies in {elapsed:.1f}s")
-        print(f"[ISAC] → Speedup: ~{count * 0.5 / 60:.1f} min saved during dataset generation!")
+        print(f"[ISAC] âœ“ Cached {len(self.topology_cache)} topologies in {elapsed:.1f}s")
+        print(f"[ISAC] â†’ Speedup: ~{count * 0.5 / 60:.1f} min saved during dataset generation!")
     
     def set_cached_topology(self, idx=None):
         """
