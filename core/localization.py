@@ -1,5 +1,5 @@
 # ======================================
-# Ã°Å¸â€œâ€ž core/localization.py (Precision TDoA)
+# 📡 core/localization.py (Precision TDoA)
 # Purpose: Robust TDoA localization with high-res GCC and GN refine
 # Changes:
 #  - Blocked GCC-PHAT (avg over segments), upsample=256
@@ -7,12 +7,27 @@
 #  - WLS solve + Gauss-Newton refine (TDoA-only by default)
 #  - Conservative bounds + residual-based sanity checks
 #  - STNN-aided CAF refinement (Section 3.3 ICCIP 2024)
+#  - Intelligent satellite selection (visibility + GDOP + IRLS)
 # ======================================
 
 import os
 import numpy as np
 from scipy.optimize import least_squares
 import tensorflow as tf
+
+# Import satellite selection module
+try:
+    from core.satellite_selection import (
+        SatelliteObservation,
+        select_satellites_hybrid,
+        filter_visible_satellites,
+        compute_gdop
+    )
+    SATELLITE_SELECTION_AVAILABLE = True
+    print("✓ Satellite selection module loaded")
+except ImportError:
+    SATELLITE_SELECTION_AVAILABLE = False
+    print("⚠️ Satellite selection module not available, using all satellites")
 
 # Initialize multi-GPU strategy if available
 try:
@@ -31,13 +46,76 @@ except Exception as e:
 UPSAMPLE = 256           # Upsampling factor for sub-sample resolution
 NUM_BLOCKS = 8           # Number of correlation blocks
 BLOCK_OVERLAP = 0.5      # Overlap between blocks
-BETA = 0.9               # GCC-ÃŽÂ² (close to PHAT)
+BETA = 0.9               # GCC-β (close to PHAT)
 USE_HANN = True
 MAX_TDOA_ABS_M = 4.0e5   # Reject invalid TDoA values (<= 400 km)
 MAX_POS_NORM_M = 8.0e5   # Max allowed position norm (<= 800 km)
 REFINE_ITERS = 15        # Gauss-Newton refinement iterations
-USE_FDOA = False         # Currently disabled
+USE_FDOA = True          # Currently disabled
+
+# Satellite selection parameters
+USE_SATELLITE_SELECTION = True  # Enable intelligent satellite selection
+MIN_ELEVATION_DEG = 15.0        # Minimum elevation angle for visibility
+TARGET_SAT_COUNT = 12           # Target number of satellites to use
+USE_GDOP_OPTIMIZATION = True    # Enable GDOP-based geometry optimization
+USE_IRLS_OUTLIERS = True        # Enable IRLS outlier removal
 # ---------------------------
+
+
+# ======================================
+# 🧮 GDOP Computation for TDOA
+# ======================================
+def compute_gdop_tdoa(sat_positions: list, emitter_pos: np.ndarray) -> float:
+    """
+    Compute GDOP (Geometric Dilution of Precision) for TDOA localization.
+    
+    GDOP = sqrt(trace((H^T H)^-1))
+    where H is the Jacobian matrix of TDOA equations.
+    
+    Args:
+        sat_positions: List of satellite positions [(x,y,z), ...] in meters
+        emitter_pos: Estimated emitter position [x, y, z] in meters
+    
+    Returns:
+        GDOP value (lower is better, <10 is good)
+    """
+    if len(sat_positions) < 4:
+        return float('inf')  # Not enough satellites
+    
+    # Reference satellite (first one)
+    ref_pos = np.array(sat_positions[0])
+    
+    # Build Jacobian matrix
+    H = []
+    for i in range(1, len(sat_positions)):
+        sat_pos = np.array(sat_positions[i])
+        
+        # Distance from emitter to satellites
+        d_ref = np.linalg.norm(emitter_pos - ref_pos)
+        d_i = np.linalg.norm(emitter_pos - sat_pos)
+        
+        if d_ref < 1e-6 or d_i < 1e-6:
+            continue
+        
+        # Gradient of TDOA with respect to emitter position
+        grad_i = (emitter_pos - sat_pos) / d_i - (emitter_pos - ref_pos) / d_ref
+        H.append(grad_i[:2])  # Only x, y (z=0 assumed)
+    
+    if len(H) < 3:
+        return float('inf')
+    
+    H = np.array(H)
+    
+    try:
+        # Covariance matrix: (H^T H)^-1
+        HTH = H.T @ H
+        HTH_inv = np.linalg.inv(HTH + 1e-10 * np.eye(HTH.shape[0]))
+        
+        # GDOP = sqrt(trace(Cov))
+        gdop = np.sqrt(np.trace(HTH_inv))
+        return float(gdop)
+    except np.linalg.LinAlgError:
+        return float('inf')
 
 
 # ======================================
@@ -478,9 +556,42 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
         return est, np.array(gt)
     return None, None
 
-def run_tdoa_localization(dataset, y_hat, y_te, idx_te, isac_system):
+def run_tdoa_localization(dataset, y_hat, y_te, idx_te, isac_system, use_enhanced=False):
+    """
+    Run TDoA localization on true positive detections.
+    
+    Args:
+        dataset: Dataset dictionary
+        y_hat: Predicted labels
+        y_te: True labels
+        idx_te: Sample indices
+        isac_system: ISAC system instance
+        use_enhanced: If True, use enhanced localization pipeline with satellite selection,
+                      CAF refinement, and FDOA support. If False, use traditional method.
+    """
+    
+    # Use enhanced pipeline if requested
+    if use_enhanced:
+        try:
+            from core.localization_enhanced import run_enhanced_tdoa_localization
+            return run_enhanced_tdoa_localization(
+                dataset=dataset,
+                y_hat=y_hat,
+                y_te=y_te,
+                idx_te=idx_te,
+                isac_system=isac_system,
+                use_satellite_selection=True,
+                use_caf_refinement=True,
+                use_fdoa=False,  # Can be enabled if needed
+                verbose=False
+            )
+        except Exception as e:
+            print(f"⚠️ Enhanced localization failed: {e}")
+            print("Falling back to traditional method...")
+    
     print("\n[Phase 5] Running TDoA localization...")
     print("\n=== PHASE 8: HYBRID TDoA/FDoA LOCALIZATION ===")
+
     
     # ✅ Check if STNN is available
     use_stnn = hasattr(isac_system, 'stnn_estimator') and isac_system.stnn_estimator is not None

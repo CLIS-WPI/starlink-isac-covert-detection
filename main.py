@@ -33,7 +33,11 @@ from utils.plots import generate_all_plots
 from core.isac_system import ISACSystem, NTN_MODELS_AVAILABLE
 from core.dataset_generator import generate_dataset_multi_satellite
 from core.feature_extraction import extract_features_and_split
-from core.localization import run_tdoa_localization, compute_crlb
+
+# 🔧 FIX: Use enhanced localization pipeline with STNN+CAF+GDOP+IRLS
+from core.localization_enhanced import run_tdoa_localization_enhanced, compute_crlb
+# Legacy import kept for backward compatibility
+# from core.localization import run_tdoa_localization, compute_crlb
 
 # Model
 from model.detector import train_detector, evaluate_detector
@@ -140,9 +144,16 @@ def main():
     y_hat = (y_prob > best_thr).astype(int)
     
     # ===== Phase 6: TDoA Localization =====
-    print("\n[Phase 5] Running TDoA localization...")
-    loc_errors, tp_sample_ids, tp_ests, tp_gts = run_tdoa_localization(
-        dataset, y_hat, y_te, idx_te, isac
+    print("\n[Phase 5] Running Enhanced TDoA/FDoA Localization...")
+    print("  → Using: STNN coarse + CAF refinement + GDOP + IRLS")
+    
+    # 🔧 FIX: Use enhanced localization with full pipeline
+    loc_errors, tp_sample_ids, tp_ests, tp_gts = run_tdoa_localization_enhanced(
+        dataset, y_hat, y_te, idx_te, isac,
+        use_satellite_selection=True,  # Enable GDOP + visibility filtering
+        use_caf_refinement=True,       # Enable CAF refinement around STNN
+        use_fdoa=True,                 # Enable FDOA measurements
+        verbose=True
     )
     
     # CRLB Analysis

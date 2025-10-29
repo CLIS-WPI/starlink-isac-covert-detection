@@ -37,7 +37,7 @@ if __name__ == "__main__":
         epochs_tdoa=50,
         epochs_fdoa=50,
         batch_size=32,
-        use_multi_gpu=True
+        use_multi_gpu=False  # Disabled multi-GPU to avoid hanging
     )
     
     print("\n✓ Training complete! Next steps:")

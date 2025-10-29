@@ -1,33 +1,36 @@
 # ======================================
 # 📄 config/settings.py
-# Purpose: Centralized configuration (OPTIMIZED)
+# Purpose: Centralized configuration (OPTIMIZED for LEO FDOA)
 # ======================================
 
 import os
+import numpy as np
 
 # ======================================
 # ⚙️ System Settings
 # ======================================
-USE_NTN_IF_AVAILABLE = True  # Set False for Rayleigh (faster testing)
+USE_NTN_IF_AVAILABLE = True
 GPU_INDEX = 0
-# ✅ FRIEND'S FIX: Increase covert power for better detection
-DEFAULT_COVERT_ESNO_DB = 12.0  # ✅ CHANGED: 15.0 → 18.0
+DEFAULT_COVERT_ESNO_DB = 12.0
 
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 1500  # Total 3000 samples
+NUM_SAMPLES_PER_CLASS = 1500
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"
 MODEL_DIR = "model"
 RESULT_DIR = "result"
 
+# TLE file path for SGP4-based constellation (optional)
+TLE_PATH = "data/starlink.txt"  # Set to None if not using TLE-based orbit
+
 # ======================================
 # 🧠 Training Hyperparameters
 # ======================================
-TRAIN_EPOCHS = 50  # ✅ 30 → 50
+TRAIN_EPOCHS = 50
 TRAIN_BATCH = 64
-LEARNING_RATE = 1e-4  # ✅ 3e-4 → 1e-4
+LEARNING_RATE = 1e-4
 VALIDATION_SPLIT = 0.2
 
 # ======================================
@@ -37,8 +40,6 @@ ABLATION_CONFIG = {
     'use_spectrogram': True,
     'use_rx_features': True,
     'use_curvature_weights': True,
-    # ✅ FRIEND'S FIX: Turn off power preservation.
-    # This makes the attack ADD power, making it detectable.
     'power_preserving_covert': False
 }
 
@@ -68,39 +69,59 @@ SCENARIO_TOPOLOGY = "dur"
 SAT_HEIGHT = 600e3
 ELEVATION_ANGLE = 50.0
 
-# MCS/LDPC
+# ======================================
+# 🛰 LEO Satellite Dynamics (NEW)
+# ======================================
+# Orbital velocity for LEO at ~600 km altitude ≈ 7.56 km/s
+LEO_ORBITAL_VELOCITY_MPS = 7560.0
+
+# Radial component relative to ground terminal depends on elevation angle
+LEO_RADIAL_VELOCITY_MPS = LEO_ORBITAL_VELOCITY_MPS * np.cos(np.deg2rad(ELEVATION_ANGLE))
+
+# Maximum Doppler shift per satellite (for 28 GHz carrier)
+LEO_MAX_DOPPLER_HZ = (LEO_RADIAL_VELOCITY_MPS / 3e8) * CARRIER_FREQUENCY
+
+# ======================================
+# 📡 MCS/LDPC
+# ======================================
 NUM_BITS_PER_SYMBOL = 4
 CODERATE = 0.5
 LDPC_K = 512
 LDPC_N = 1024
 
-# Localization
-USE_FDOA = True
+# ======================================
+# 📍 Localization Settings
+# ======================================
+USE_FDOA = True                     # ✅ enable FDOA refinement
+USE_TDOA = True
+FDOA_USE_SAT_VELOCITY = True        # ✅ enable use of satellite velocities
+FDOA_MAX_DOPPLER_HZ = LEO_MAX_DOPPLER_HZ
+FDOA_ELEVATION_ANGLE_DEG = ELEVATION_ANGLE
+
 RESIDUAL_CNN_PATH = "model/localization_residual_cnn.keras"
 
 # ======================================
-# 🚀 STNN Configuration (NEW!)
+# 🚀 STNN Configuration
 # ======================================
-USE_STNN_LOCALIZATION = True  # Enable STNN-aid CAF method
+USE_STNN_LOCALIZATION = True
 STNN_TDOA_MODEL_PATH = "model/stnn_tdoa_best.keras"
 STNN_FDOA_MODEL_PATH = "model/stnn_fdoa_best.keras"
 STNN_ERROR_STATS_PATH = "model/stnn_error_stats.pkl"
 
 # STNN Feature Extraction
-STNN_STFT_NPERSEG = 256  # STFT segment length
-STNN_STFT_OUTPUT_SHAPE = (256, 256)  # STFT output shape (H, W)
+STNN_STFT_NPERSEG = 256
+STNN_STFT_OUTPUT_SHAPE = (256, 256)
 
 # STNN Training
 STNN_EPOCHS_TDOA = 50
 STNN_EPOCHS_FDOA = 50
 STNN_BATCH_SIZE = 32
-STNN_USE_MULTI_GPU = True  # Use both H100 GPUs for training
+STNN_USE_MULTI_GPU = True
 
 # ======================================
 # 📂 Directory Management
 # ======================================
 def init_directories():
-    """Create necessary directories if they don't exist."""
     for d in [DATASET_DIR, MODEL_DIR, RESULT_DIR]:
         os.makedirs(d, exist_ok=True)
         print(f"✓ Directory ensured: {d}/")
@@ -109,7 +130,6 @@ def init_directories():
 # 🧮 Derived Parameters
 # ======================================
 def get_experiment_name():
-    """Generate unique experiment name based on ablation config."""
     parts = []
     if not ABLATION_CONFIG['use_spectrogram']:
         parts.append('no-spec')
@@ -124,8 +144,6 @@ def get_experiment_name():
 EXPERIMENT_NAME = get_experiment_name()
 
 def covert_scale_from_esno_db(esno_db):
-    """Convert Es/N0 (dB) to linear amplitude scaling."""
-    import numpy as np
     return float(np.sqrt(10.0**(esno_db/10.0)))
 
 COVERT_AMP = covert_scale_from_esno_db(DEFAULT_COVERT_ESNO_DB)

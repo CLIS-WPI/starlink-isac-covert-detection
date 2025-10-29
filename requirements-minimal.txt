@@ -10,3 +10,4 @@ seaborn
 pytest
 pytest-cov
 pytest-xdist
+sgp4

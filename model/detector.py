@@ -99,7 +99,12 @@ def build_dual_input_cnn_h100():
     
     model = Model([a_in, b_in], out)
     
-    opt = optimizers.Adam(learning_rate=LEARNING_RATE, epsilon=1e-7)
+    # Clip gradients to prevent explosion
+    opt = optimizers.Adam(
+        learning_rate=LEARNING_RATE, 
+        epsilon=1e-7,
+        clipnorm=1.0  # Gradient clipping
+    )
     
     model.compile(
         optimizer=opt,
@@ -108,7 +113,7 @@ def build_dual_input_cnn_h100():
             'accuracy',
             tf.keras.metrics.AUC(name='auc', from_logits=True)
         ],
-        jit_compile=True,
+        jit_compile=False,  # Disabled to prevent NaN issues
         steps_per_execution=128
     )
     

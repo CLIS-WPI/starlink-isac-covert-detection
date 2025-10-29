@@ -214,9 +214,11 @@ def train_stnn_tdoa(data: Dict,
             print(f"\n✓ Multi-GPU enabled: {strategy.num_replicas_in_sync} GPUs")
         except:
             print("\n⚠️  Multi-GPU failed, using single GPU")
-            strategy = tf.distribute.get_strategy()  # Default strategy
+            strategy = tf.distribute.OneDeviceStrategy(device="/GPU:0")
     else:
-        strategy = tf.distribute.get_strategy()
+        # Explicitly use GPU:0 instead of default strategy
+        print("\n✓ Using single GPU: /GPU:0")
+        strategy = tf.distribute.OneDeviceStrategy(device="/GPU:0")
     
     # Build model within strategy scope
     with strategy.scope():
@@ -274,9 +276,11 @@ def train_stnn_fdoa(data: Dict,
             print(f"\n✓ Multi-GPU enabled: {strategy.num_replicas_in_sync} GPUs")
         except:
             print("\n⚠️  Multi-GPU failed, using single GPU")
-            strategy = tf.distribute.get_strategy()
+            strategy = tf.distribute.OneDeviceStrategy(device="/GPU:0")
     else:
-        strategy = tf.distribute.get_strategy()
+        # Explicitly use GPU:0 instead of default strategy
+        print("\n✓ Using single GPU: /GPU:0")
+        strategy = tf.distribute.OneDeviceStrategy(device="/GPU:0")
     
     # Build model within strategy scope
     with strategy.scope():

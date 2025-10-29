@@ -1,5 +1,5 @@
 # ======================================
-# ðŸ“„ core/isac_system.py
+#  core/isac_system.py
 # Purpose: ISAC System with optimized topology caching
 # OPTIMIZED: Pre-generates 1000+ topologies for reuse
 # ======================================
@@ -269,3 +269,48 @@ class ISACSystem:
             self.CHANNEL_MODEL.set_topology(*self.topology_cache[idx])
         except Exception:
             pass  # Silent fail (channel may not support topology)
+    
+    def save_topology_cache(self, path):
+        """
+        Save pre-generated topology cache to disk.
+        
+        Args:
+            path: File path to save cache (e.g., "cache/ntn_topologies.pkl")
+        """
+        if not self.topology_cache:
+            print("[ISAC] ⚠️  No topology cache to save")
+            return
+        
+        import pickle
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        try:
+            with open(path, 'wb') as f:
+                pickle.dump(self.topology_cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(f"[ISAC] ✅ Saved {len(self.topology_cache)} topologies to {path}")
+        except Exception as e:
+            print(f"[ISAC] ⚠️  Failed to save topology cache: {e}")
+    
+    def load_topology_cache(self, path):
+        """
+        Load pre-generated topology cache from disk.
+        
+        Args:
+            path: File path to load cache from
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not os.path.exists(path):
+            print(f"[ISAC] ⚠️  Topology cache not found: {path}")
+            return False
+        
+        import pickle
+        try:
+            with open(path, 'rb') as f:
+                self.topology_cache = pickle.load(f)
+            print(f"[ISAC] ✅ Loaded {len(self.topology_cache)} topologies from {path}")
+            return True
+        except Exception as e:
+            print(f"[ISAC] ⚠️  Failed to load topology cache: {e}")
+            return False
