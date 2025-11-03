@@ -139,6 +139,8 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         # If user provided a TLE and selector available & num_satellites==12, use it
         if num_satellites == 12 and USE_CONST_SEL and tle_path is not None:
             try:
+                # 🎯 IMPORTANT: We need to know emitter location BEFORE satellite selection
+                # For now, use nadir of target as initial guess, then we'll update
                 sel = select_target_and_sensors(
                     tle_path=tle_path,
                     obs_time=datetime.now(timezone.utc),
@@ -161,23 +163,65 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                     r_ecef = np.array(s['r_ecef'], dtype=float)
                     r_local = r_ecef - ground_obs  # Offset so ground is at origin
                     
+                    # 🔍 DEBUG: Print first satellite info
+                    if len(base_positions) == 0 and idx == 0:
+                        print(f"[DEBUG] First satellite ECEF check:")
+                        print(f"  r_ecef = {r_ecef}")
+                        print(f"  |r_ecef| = {np.linalg.norm(r_ecef)/1e3:.1f} km")
+                        print(f"  ground_obs = {ground_obs}")
+                        print(f"  |ground_obs| = {np.linalg.norm(ground_obs)/1e3:.1f} km")
+                    
                     # For simulation, we need altitude (z-coordinate) to be actual height
                     # Compute altitude from ECEF magnitude
                     r_ecef_mag = np.linalg.norm(r_ecef)
-                    ground_mag = np.linalg.norm(ground_obs)
-                    altitude = r_ecef_mag - ground_mag  # Altitude above ground
+                    R_EARTH = 6371e3  # Earth radius [m]
+                    altitude = r_ecef_mag - R_EARTH  # Altitude above Earth surface
+                    
+                    # 🔍 DEBUG: Print altitude calculation
+                    if len(base_positions) == 0 and idx == 0:
+                        print(f"  altitude = {altitude/1e3:.1f} km")
                     
                     # Use local x,y but replace z with altitude
                     base_positions.append(np.array([r_local[0], r_local[1], altitude]))
                     base_velocities.append(np.array(s['v_ecef'], dtype=float))
+                
                 # ensure length
                 if len(base_positions) < num_satellites:
                     # fallback to randomized fill
                     raise RuntimeError("select_target returned insufficient sensors")
-                # designate attacked_sat_index randomly among sensors (0..num_satellites-1)
-                attacked_sat_index = np.random.randint(0, num_satellites)
-                attacked_sat_pos = base_positions[attacked_sat_index]
-                attacked_sat_vel = base_velocities[attacked_sat_index]
+                
+                # 🎯 EMITTER LOCATION SETUP (CRITICAL FIX!)
+                # For attack samples, emitter is on the GROUND, not at satellite altitude!
+                # We place emitter randomly within reasonable range of ground_observer
+                
+                if is_attack:
+                    # Emitter on ground (z≈0), within ±500 km of ground observer
+                    # This simulates realistic ground-based covert transmitter
+                    emitter_offset_x = np.random.uniform(-500e3, 500e3)  # ±500 km range
+                    emitter_offset_y = np.random.uniform(-500e3, 500e3)
+                    
+                    # Emitter location in LOCAL coordinates (z=0 for ground level)
+                    emitter_local = np.array([emitter_offset_x, emitter_offset_y, 0.0])
+                    
+                    # For compatibility with existing code, we still pick an "attacked satellite"
+                    # but use it only to determine which satellite receives the covert signal
+                    attacked_sat_index = np.random.randint(0, num_satellites)
+                    attacked_sat_pos = emitter_local  # ✅ Use emitter location, not satellite!
+                    attacked_sat_vel = np.array([0.0, 0.0, 0.0])  # Emitter is stationary
+                    
+                    if idx % 100 == 0:
+                        print(f"[Sample {idx}] Emitter at ground: ({emitter_offset_x/1e3:.1f}, {emitter_offset_y/1e3:.1f}, 0.0) km")
+                else:
+                    # Benign: use default user location
+                    attacked_sat_index = None
+                    attacked_sat_pos = np.array([50e3, 50e3, 0.0])  # Default user on ground
+                    attacked_sat_vel = np.array([0.0, 0.0, 0.0])
+                
+                # ⚠️ NOTE: ground_observer is still nadir of target (not ideal)
+                # Ideally we should pass emitter_location to select_target_and_sensors()
+                # so elevation checks are done from emitter's perspective.
+                # For now, we accept some satellites may not actually be visible from emitter.
+                
             except Exception as e:
                 # fallback to randomized geometry below
                 if not tle_warning_shown:
@@ -246,14 +290,26 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                     base_positions.append(np.array([x, y_p, 600e3 + altitude_offset]))
                     base_velocities.append(get_random_velocity())
 
-            attacked_sat_index = np.random.randint(0, num_satellites)
-            attacked_sat_pos = base_positions[attacked_sat_index]
-            attacked_sat_vel = base_velocities[attacked_sat_index]
+            # 🎯 EMITTER LOCATION (same fix as TLE path)
+            if is_attack:
+                # Emitter on ground, not at satellite altitude!
+                emitter_offset_x = np.random.uniform(-500e3, 500e3)
+                emitter_offset_y = np.random.uniform(-500e3, 500e3)
+                attacked_sat_pos = np.array([emitter_offset_x, emitter_offset_y, 0.0])  # ✅ Ground level
+                attacked_sat_vel = np.array([0.0, 0.0, 0.0])
+                attacked_sat_index = np.random.randint(0, num_satellites)  # For reference only
+            else:
+                attacked_sat_pos = np.array([50e3, 50e3, 0.0])  # Default user
+                attacked_sat_vel = np.array([0.0, 0.0, 0.0])
+                attacked_sat_index = None
 
         # occasional logging
         if idx % 200 == 0:
             try:
-                print(f"[Sample {idx}] attacked_sat={attacked_sat_index}, sat0_alt={base_positions[0][2]/1e3:.1f}km")
+                if is_attack:
+                    print(f"[Sample {idx}] emitter_ground=({attacked_sat_pos[0]/1e3:.1f},{attacked_sat_pos[1]/1e3:.1f},0.0)km, sat0_alt={base_positions[0][2]/1e3:.1f}km")
+                else:
+                    print(f"[Sample {idx}] benign, sat0_alt={base_positions[0][2]/1e3:.1f}km")
             except Exception:
                 pass
 
@@ -424,19 +480,32 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             rx_time_cropped = rx_time_padded_channel[:, delay_samp: delay_samp + signal_length]
             rx_grid_cropped = isac_system.demodulator(rx_time_cropped)
 
-            # Path B: clean geometric delay (derive from tx_time_for_sat which may be attacked)
-            tx_time_for_sat_flat = tf.squeeze(tx_time_for_sat)
-            tx_time_padded_for_sat = tf.pad(tf.expand_dims(tx_time_for_sat_flat, 0), [[0,0],[0,max_delay_samp]], constant_values=0)
-            # apply same delay
-            rx_time_padded_clean_rolled = tf.roll(tx_time_padded_for_sat, shift=delay_samp, axis=-1)
+            # 🔧 CRITICAL FIX: Path B must use CLEAN signal passed through CHANNEL
+            # - For localization, we need: RX = clean_signal * channel + noise
+            # - NOT: RX = attacked_signal * channel + noise
+            # - This ensures tx_time_padded (clean) correlates with rx_time_b_full
+            
+            # ALWAYS use clean tx_grid for Path B (even for attacked satellites)
+            y_grid_channel_clean = tx_grid_clean * h_f  # Apply channel to CLEAN signal
+            
+            # Convert to time domain
+            y_time_clean_channel = isac_system.modulator(y_grid_channel_clean)
+            y_time_clean_flat = tf.squeeze(y_time_clean_channel)
+            
+            # Pad and apply delay
+            y_time_clean_padded = tf.pad(
+                tf.expand_dims(y_time_clean_flat, 0),
+                [[0,0],[0,max_delay_samp]],
+                constant_values=0
+            )
+            rx_time_padded_clean_rolled = tf.roll(y_time_clean_padded, shift=delay_samp, axis=-1)
 
             # Add AWGN to Path B (match SNR used for Path A)
             try:
-                tx_pow = tf.reduce_mean(tf.abs(tx_time_padded_for_sat)**2)
-                # 🛡️ Ensure minimum power floor (prevent division by zero)
-                tx_pow = tf.maximum(tx_pow, 1e-20)
+                rx_pow_clean = tf.reduce_mean(tf.abs(rx_time_padded_clean_rolled)**2)
+                rx_pow_clean = tf.maximum(rx_pow_clean, 1e-20)
                 
-                sigma2_time = tx_pow / esn0
+                sigma2_time = rx_pow_clean / esn0
                 std_time = tf.sqrt(tf.cast(sigma2_time / 2.0, tf.float32))
                 noise_padded = tf.complex(
                     tf.random.normal(tf.shape(rx_time_padded_clean_rolled), stddev=std_time),
@@ -543,6 +612,88 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     all_sat_recepts = [x[1] for x in sorted(all_sat_recepts, key=lambda z: z[0])]
 
     print(f"✓ Dataset generation complete: {len(all_labels)} samples")
+    
+    # ========================================================================
+    # 🔧 POWER NORMALIZATION: DISABLED
+    # ========================================================================
+    # NOTE: Post-channel power normalization causes Cohen's d → 0 because:
+    #   1. We normalize all attacks to benign power → removes all variance
+    #   2. Channel variance is HUGE (CV=8-10x) → normalization meaningless
+    #   3. Covert detection should use SPECTRAL features, not power!
+    #
+    # Solution: Trust power_preserving_covert in OFDM grid (before channel)
+    # Let channel add natural variance. Detector uses spectrogram to find
+    # covert subcarriers, NOT raw power comparison.
+    #
+    # If you want to enable normalization, set ENABLE_POWER_NORMALIZATION=True
+    ENABLE_POWER_NORMALIZATION = False
+    
+    if ENABLE_POWER_NORMALIZATION:
+        print("\n[Power Normalization] Normalizing attack samples to match benign distribution...")
+        
+        # Step 1: Calculate power distribution of benign samples
+        benign_powers = []
+        for i, label in enumerate(all_labels):
+            if label == 0:  # Benign
+                signal_power = np.mean(np.abs(all_iq[i])**2)
+                benign_powers.append(signal_power)
+        
+        if len(benign_powers) > 0:
+            benign_powers = np.array(benign_powers)
+            mean_benign_power = np.mean(benign_powers)
+            std_benign_power = np.std(benign_powers)
+            
+            print(f"  Benign power distribution: {mean_benign_power:.6e} ± {std_benign_power:.6e}")
+            
+            # Step 2: For each attack sample, sample a target power from benign distribution
+            normalized_count = 0
+            attack_powers_before = []
+            attack_powers_after = []
+            
+            np.random.shuffle(benign_powers)
+            
+            for i, label in enumerate(all_labels):
+                if label == 1:  # Attack
+                    current_power = np.mean(np.abs(all_iq[i])**2)
+                    attack_powers_before.append(current_power)
+                    
+                    target_power = benign_powers[normalized_count % len(benign_powers)]
+                    
+                    if current_power > 1e-20:
+                        scale_factor = np.sqrt(target_power / current_power)
+                        all_iq[i] = all_iq[i] * scale_factor
+                        
+                        for sat_rx in all_sat_recepts[i]:
+                            sat_rx['rx_time'] = sat_rx['rx_time'] * scale_factor
+                            sat_rx['rx_freq'] = sat_rx['rx_freq'] * scale_factor
+                            sat_rx['rx_time_b_cropped'] = sat_rx['rx_time_b_cropped'] * scale_factor
+                            sat_rx['rx_freq_b'] = sat_rx['rx_freq_b'] * scale_factor
+                        
+                        normalized_count += 1
+                        final_power = np.mean(np.abs(all_iq[i])**2)
+                        attack_powers_after.append(final_power)
+            
+            if len(attack_powers_before) > 0:
+                mean_before = np.mean(attack_powers_before)
+                std_before = np.std(attack_powers_before)
+                mean_after = np.mean(attack_powers_after) if len(attack_powers_after) > 0 else 0
+                std_after = np.std(attack_powers_after) if len(attack_powers_after) > 0 else 0
+                ratio_before = mean_before / mean_benign_power if mean_benign_power > 0 else 0
+                ratio_after = mean_after / mean_benign_power if mean_benign_power > 0 else 0
+                
+                print(f"  ✓ Normalized {normalized_count} attack samples")
+                print(f"  Power ratio BEFORE: {ratio_before:.4f}")
+                print(f"  Power ratio AFTER:  {ratio_after:.4f}")
+                print(f"  Attack variance BEFORE: {std_before:.6e}")
+                print(f"  Attack variance AFTER:  {std_after:.6e}")
+                print(f"  Benign variance:        {std_benign_power:.6e}")
+        else:
+            print("  ⚠️ No benign samples found, skipping normalization")
+    else:
+        print("\n[Power Normalization] DISABLED - Using natural channel variance")
+        print("  → Detection relies on spectral features, not power comparison")
+    
+    print("=" * 60)
 
     # Collect Path-B clean (or attacked for attacked sat) per-sample -> pick sat index 0 as canonical export
     all_rx_time_b_full = []

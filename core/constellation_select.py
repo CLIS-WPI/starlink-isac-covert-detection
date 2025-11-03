@@ -181,7 +181,13 @@ def select_target_and_sensors(
         
         # Rank by angular separation from target
         angs = [_angular_sep(target_state.r_ecef_m, s.r_ecef_m) for s, _ in visible_sensors]
-        order = np.argsort(angs)  # Closest satellites in orbit
+        
+        if use_gdop_optimization and len(visible_sensors) > num_sensors:
+            # For GDOP optimization: start with DIVERSE satellites (max angular separation)
+            order = np.argsort(angs)[::-1]  # 🔧 FIXED: Furthest satellites for better geometry
+        else:
+            # Without GDOP: use closest satellites (original behavior)
+            order = np.argsort(angs)  # Closest satellites in orbit
         
         selected = [visible_sensors[i] for i in order[:num_sensors]]
         sensors = [s for s, _ in selected]
@@ -192,8 +198,15 @@ def select_target_and_sensors(
             try:
                 from core.localization import compute_gdop_tdoa
                 
-                # Start with best angular separation satellites
-                best_sensors = sensors[:4]  # Need at least 4 for GDOP
+                # Start with 4 satellites with maximum angular diversity
+                # Pick satellites roughly 90° apart for tetrahedral geometry
+                n_candidates = len(sensors)
+                if n_candidates >= 4:
+                    indices = [0, n_candidates//4, n_candidates//2, 3*n_candidates//4]
+                    best_sensors = [sensors[i] for i in indices[:4]]
+                else:
+                    best_sensors = sensors[:4]
+                
                 best_gdop = float('inf')
                 
                 # Estimate emitter position (use ground observer as initial guess)

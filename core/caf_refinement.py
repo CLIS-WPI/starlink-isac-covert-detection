@@ -19,7 +19,7 @@ def caf_refinement_2d(
     sigma_tau_s: float,
     sigma_fd_hz: float,
     Ts: float,
-    k_sigma: float = 2.0,
+    k_sigma: float = 3.0,  # ✅ 3σ window for 99.7% coverage (was 2σ = 95%)
     step_tau_s: float = None,
     step_fd_hz: float = 1.0,
     doppler_max_hz: float = None
@@ -58,7 +58,12 @@ def caf_refinement_2d(
     taus = np.arange(tau_min, tau_max + step_tau_s, step_tau_s)
     fds = np.arange(fd_min, fd_max + step_fd_hz, step_fd_hz)
 
-    N = len(rx_ref)
+    # 🔧 FIX: Ensure both signals have same length (trim to shorter)
+    min_len = min(len(rx_ref), len(rx_aux))
+    rx_ref = rx_ref[:min_len]
+    rx_aux = rx_aux[:min_len]
+    
+    N = min_len
     t = np.arange(N) * Ts
     ref_conj = np.conjugate(rx_ref)
 

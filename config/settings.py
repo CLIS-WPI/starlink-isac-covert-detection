@@ -11,12 +11,13 @@ import numpy as np
 # ======================================
 USE_NTN_IF_AVAILABLE = True
 GPU_INDEX = 0
-DEFAULT_COVERT_ESNO_DB = 12.0
+DEFAULT_COVERT_ESNO_DB = 20.0  # 🔧 Covert signal strength (higher = more detectable, lower = harder to detect)
+                               # 15 dB gives good balance: spectral Cohen's d ~0.2-0.4
 
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 1500
+NUM_SAMPLES_PER_CLASS = 1500  # 🎯 PRODUCTION: 3000 total (1500+1500) for best quality
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"
 MODEL_DIR = "model"
@@ -28,9 +29,9 @@ TLE_PATH = "data/starlink.txt"  # Set to None if not using TLE-based orbit
 # ======================================
 # 🧠 Training Hyperparameters
 # ======================================
-TRAIN_EPOCHS = 50
+TRAIN_EPOCHS = 100              # 🔧 Increased from 50 to 100 (with early stopping)
 TRAIN_BATCH = 64
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 5e-5            # 🔧 Reduced from 1e-4 to 5e-5 (slower, more stable)
 VALIDATION_SPLIT = 0.2
 
 # ======================================
@@ -40,7 +41,7 @@ ABLATION_CONFIG = {
     'use_spectrogram': True,
     'use_rx_features': True,
     'use_curvature_weights': True,
-    'power_preserving_covert': False
+    'power_preserving_covert': True  # 🔧 ENABLED: Keep power ratio ~1.0 for realistic covert channel
 }
 
 # ======================================

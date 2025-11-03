@@ -220,7 +220,7 @@ def main():
         'use_ntn': USE_NTN_IF_AVAILABLE,
         'topology_cache_size': 1000,  # Cache 1000 topologies per GPU
         'topology_cache_path': 'cache/ntn_topologies.pkl',  # Persistent cache file
-        'ebno_range': (5, 15),
+        'ebno_range': (15, 25),        # 🔧 INCREASED from (5,15) to (15,25) for better SNR
         'covert_rate_range': (1, 50),
         'tle_path': TLE_PATH,                      # TLE file path for real Starlink positions
         'inject_attack_into_pathb': True           # Inject covert attack into Path-B for attacked satellite

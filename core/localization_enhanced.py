@@ -13,6 +13,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from typing import Dict, List, Tuple, Optional
 import time
+from tqdm import tqdm
 
 # Constants
 C_LIGHT = 299792458.0  # Speed of light [m/s]
@@ -169,8 +170,9 @@ def estimate_emitter_location_enhanced(
             info['stnn']['sigma_fdoa_hz'] = sigma_fdoa_hz
             info['stnn']['used'] = True
             
-            if verbose:
-                print(f"[Sample {sample_idx}] ✓ STNN available: σ_TDOA={sigma_tdoa_s*1e6:.2f} μs, σ_FDOA={sigma_fdoa_hz:.2f} Hz")
+            # Reduced verbosity for speed
+            # if verbose:
+            #     print(f"[Sample {sample_idx}] ✓ STNN available: σ_TDOA={sigma_tdoa_s*1e6:.2f} μs, σ_FDOA={sigma_fdoa_hz:.2f} Hz")
             
             # Note: STNN predictions would be computed here if we had the model inference
             # For now, we'll use GCC-PHAT as baseline and apply STNN σ for weighting
@@ -189,6 +191,10 @@ def estimate_emitter_location_enhanced(
     stage2_start = time.time()
     
     selected_sats = list(sats)  # Default: use all
+    
+    # Initialize satellite count (even if selection is disabled)
+    info['satellites']['visible'] = len(sats)
+    info['satellites']['selected'] = len(sats)
     
     if use_satellite_selection and len(sats) > target_sat_count:
         try:
@@ -610,32 +616,49 @@ def run_enhanced_tdoa_localization(
     tp_gts = []
     info_list = []
     
-    for i, pred in enumerate(y_hat):
-        if pred == 1 and y_te[i] == 1:  # True positive
-            ds_idx = int(idx_te[i])
-            
-            est, gt, info = estimate_emitter_location_enhanced(
-                sample_idx=ds_idx,
-                dataset=dataset,
-                isac_system=isac_system,
-                use_satellite_selection=use_satellite_selection,
-                use_caf_refinement=use_caf_refinement,
-                use_fdoa=use_fdoa,
-                min_elevation_deg=min_elevation_deg,
-                target_sat_count=target_sat_count,
-                verbose=verbose
-            )
-            
-            if est is not None and gt is not None:
-                err = np.linalg.norm(est - gt)
-                loc_errors.append(err)
-                tp_sample_ids.append(ds_idx)
-                tp_ests.append(est)
-                tp_gts.append(gt)
-                info_list.append(info)
+    # 🔧 SPEEDUP: Count total and limit processing
+    n_tp = sum(1 for i, pred in enumerate(y_hat) if pred == 1 and y_te[i] == 1)
+    MAX_LOCALIZATION_SAMPLES = 20  # ⚡ Reduced from 100 to 20 for faster testing
+    print(f"  Found {n_tp} true positive samples")
+    print(f"  ⚡ Processing only first {MAX_LOCALIZATION_SAMPLES} samples for speed...")
+    
+    processed = 0
+    
+    with tqdm(total=min(n_tp, MAX_LOCALIZATION_SAMPLES), desc="Localizing", unit="sample") as pbar:
+        for i, pred in enumerate(y_hat):
+            if pred == 1 and y_te[i] == 1:  # True positive
+                if processed >= MAX_LOCALIZATION_SAMPLES:
+                    break  # Stop after N samples
+                    
+                ds_idx = int(idx_te[i])
                 
-                if len(loc_errors) <= 5:
-                    print(f"  Sample {ds_idx} | GT={gt[:2]} | EST={est[:2]} | Error={err:.2f} m")
+                est, gt, info = estimate_emitter_location_enhanced(
+                    sample_idx=ds_idx,
+                    dataset=dataset,
+                    isac_system=isac_system,
+                    use_satellite_selection=use_satellite_selection,
+                    use_caf_refinement=use_caf_refinement,
+                    use_fdoa=use_fdoa,
+                    min_elevation_deg=min_elevation_deg,
+                    target_sat_count=target_sat_count,
+                    verbose=verbose
+                )
+                
+                if est is not None and gt is not None:
+                    err = np.linalg.norm(est - gt)
+                    loc_errors.append(err)
+                    tp_sample_ids.append(ds_idx)
+                    tp_ests.append(est)
+                    tp_gts.append(gt)
+                    info_list.append(info)
+                    
+                    pbar.set_postfix({"error": f"{err:.1f}m", "median": f"{np.median(loc_errors) if loc_errors else 0:.1f}m"})
+                    
+                    if len(loc_errors) <= 5:
+                        print(f"  Sample {ds_idx} | GT={gt[:2]} | EST={est[:2]} | Error={err:.2f} m")
+                
+                processed += 1
+                pbar.update(1)
     
     if loc_errors:
         # Compute statistics

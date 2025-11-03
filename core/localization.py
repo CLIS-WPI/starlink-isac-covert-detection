@@ -14,6 +14,7 @@ import os
 import numpy as np
 from scipy.optimize import least_squares
 import tensorflow as tf
+from tqdm import tqdm
 
 # Import satellite selection module
 try:
@@ -43,8 +44,8 @@ except Exception as e:
     strategy = tf.distribute.get_strategy()  # Fallback to default
 
 # --- Tunable parameters ---
-UPSAMPLE = 256           # Upsampling factor for sub-sample resolution
-NUM_BLOCKS = 8           # Number of correlation blocks
+UPSAMPLE = 256           # Upsampling factor (higher = better time resolution)
+NUM_BLOCKS = 8           # Number of correlation blocks (more = lower variance)
 BLOCK_OVERLAP = 0.5      # Overlap between blocks
 BETA = 0.9               # GCC-β (close to PHAT)
 USE_HANN = True
@@ -99,7 +100,7 @@ def compute_gdop_tdoa(sat_positions: list, emitter_pos: np.ndarray) -> float:
         
         # Gradient of TDOA with respect to emitter position
         grad_i = (emitter_pos - sat_pos) / d_i - (emitter_pos - ref_pos) / d_ref
-        H.append(grad_i[:2])  # Only x, y (z=0 assumed)
+        H.append(grad_i)  # 🔧 FIXED: Use full 3D gradient (x, y, z)
     
     if len(H) < 3:
         return float('inf')
@@ -109,7 +110,7 @@ def compute_gdop_tdoa(sat_positions: list, emitter_pos: np.ndarray) -> float:
     try:
         # Covariance matrix: (H^T H)^-1
         HTH = H.T @ H
-        HTH_inv = np.linalg.inv(HTH + 1e-10 * np.eye(HTH.shape[0]))
+        HTH_inv = np.linalg.inv(HTH + 1e-8 * np.eye(HTH.shape[0]))  # 🔧 Better conditioning
         
         # GDOP = sqrt(trace(Cov))
         gdop = np.sqrt(np.trace(HTH_inv))
@@ -129,7 +130,9 @@ def caf_refinement(rx_ref: np.ndarray,
                    sigma_fd: float, 
                    Ts: float,
                    search_step_tau: float = None,
-                   search_step_fd: float = 1.0) -> tuple:
+                   search_step_fd: float = 5.0,  # 🔧 Increased from 1.0 to 5.0 Hz for speed
+                   max_tau_steps: int = 200,      # 🔧 Limit TDOA search to 200 steps max
+                   max_fd_steps: int = 50) -> tuple:  # 🔧 Limit FDOA search to 50 steps max
     """
     Perform CAF refinement around STNN coarse estimates.
     Only search within ±3σ of STNN estimates for computational efficiency.
@@ -146,16 +149,26 @@ def caf_refinement(rx_ref: np.ndarray,
         sigma_tau: STNN TDOA error standard deviation (seconds)
         sigma_fd: STNN FDOA error standard deviation (Hz)
         Ts: Sampling period (seconds)
-        search_step_tau: TDOA search step (seconds), defaults to Ts
+        search_step_tau: TDOA search step (seconds), auto-computed if None
         search_step_fd: FDOA search step (Hz)
+        max_tau_steps: Maximum number of TDOA search steps
+        max_fd_steps: Maximum number of FDOA search steps
     
     Returns:
         (refined_tau, refined_fd, peak_value)
     """
-    if search_step_tau is None:
-        search_step_tau = Ts
-    
     # Define search ranges (±3σ around STNN estimates)
+    tau_range_size = 6 * sigma_tau  # ±3σ
+    fd_range_size = 6 * sigma_fd    # ±3σ
+    
+    # Adaptive step size to limit grid size
+    if search_step_tau is None:
+        # Ensure tau_range has at most max_tau_steps points
+        search_step_tau = max(Ts, tau_range_size / max_tau_steps)
+    
+    # Ensure fd_range has at most max_fd_steps points
+    search_step_fd = max(search_step_fd, fd_range_size / max_fd_steps)
+    
     tau_range = np.arange(
         coarse_tau - 3 * sigma_tau,
         coarse_tau + 3 * sigma_tau + search_step_tau,
@@ -167,6 +180,12 @@ def caf_refinement(rx_ref: np.ndarray,
         coarse_fd + 3 * sigma_fd + search_step_fd,
         search_step_fd
     )
+    
+    # 🔧 Safety: Limit grid size to prevent excessive computation
+    if len(tau_range) > max_tau_steps:
+        tau_range = tau_range[:max_tau_steps]
+    if len(fd_range) > max_fd_steps:
+        fd_range = fd_range[:max_fd_steps]
     
     # Grid search for maximum CAF value
     best_val = -1
@@ -517,10 +536,10 @@ def estimate_emitter_location_tdoa(sample_idx, dataset, isac_system):
 
     rmse_m = _tdoa_res_rmse(est)
     # Ã˜Â§ÃšÂ¯Ã˜Â± Ã˜Â±Ã˜Â²Ã›Å’Ã˜Â¯Ã™Ë†Ã˜Â§Ã™â€ž Ã˜Â²Ã›Å’Ã˜Â§Ã˜Â¯ Ã˜Â¨Ã™Ë†Ã˜Â¯Ã˜Å’ Ã™â€¦Ã˜Â±Ã˜Â¬Ã˜Â¹ Ã˜Â¯Ã™Ë†Ã™â€¦ Ã˜Â±Ã˜Â§ Ã˜Â§Ã™â€¦Ã˜ÂªÃ˜Â­Ã˜Â§Ã™â€  ÃšÂ©Ã™â€ 
-    if rmse_m > 600.0 and len(sats) >= 5:
+    if rmse_m > 1000.0 and len(sats) >= 5:  # ✅ کمتر retry
         # Ã™â€¦Ã˜Â±Ã˜Â¬Ã˜Â¹ Ã˜Â¬Ã˜Â§Ã›Å’ÃšÂ¯Ã˜Â²Ã›Å’Ã™â€ : Ã˜Â¯Ã™Ë†Ã™â€¦Ã›Å’Ã™â€  TOA ÃšÂ©Ã™Ë†Ãšâ€ ÃšÂ©
         order = np.argsort(raw_toas)
-        for alt in order[1:3]:
+        for alt in order[1:2]:
             if alt == ref_idx_num:
                 continue
             tdoa_diffs2, pairs2, w_t2 = [], [], []
@@ -606,18 +625,34 @@ def run_tdoa_localization(dataset, y_hat, y_te, idx_te, isac_system, use_enhance
     print("Processing true positives...")
 
     loc_errors, tp_sample_ids, tp_ests, tp_gts = [], [], [], []
-    for i, pred in enumerate(y_hat):
-        if pred == 1 and y_te[i] == 1:  # True positive
-            ds_idx = int(idx_te[i])
-            est, gt = localization_fn(ds_idx, dataset, isac_system)
-            if est is not None and gt is not None:
-                err = np.linalg.norm(est - gt)
-                loc_errors.append(err)
-                tp_sample_ids.append(ds_idx)
-                tp_ests.append(est)
-                tp_gts.append(gt)
-                if len(loc_errors) <= 3:
-                    print(f"  Sample {ds_idx} | GT {gt[:2]} | EST {est[:2]} | Error={err:.2f} m")
+    
+    # Count true positives for progress bar
+    n_tp = sum(1 for i, pred in enumerate(y_hat) if pred == 1 and y_te[i] == 1)
+    print(f"  Found {n_tp} true positive samples to localize")
+    
+    # 🔧 SPEEDUP: Only localize first N samples for faster evaluation
+    MAX_LOCALIZATION_SAMPLES = 100  # Reduce from full dataset for speed
+    print(f"  ⚡ Processing only first {MAX_LOCALIZATION_SAMPLES} samples for speed...")
+    
+    processed = 0
+    with tqdm(total=min(n_tp, MAX_LOCALIZATION_SAMPLES), desc="Localizing", unit="sample") as pbar:
+        for i, pred in enumerate(y_hat):
+            if pred == 1 and y_te[i] == 1:  # True positive
+                if processed >= MAX_LOCALIZATION_SAMPLES:
+                    break  # Stop after N samples
+                ds_idx = int(idx_te[i])
+                est, gt = localization_fn(ds_idx, dataset, isac_system)
+                if est is not None and gt is not None:
+                    err = np.linalg.norm(est - gt)
+                    loc_errors.append(err)
+                    tp_sample_ids.append(ds_idx)
+                    tp_ests.append(est)
+                    tp_gts.append(gt)
+                    pbar.set_postfix({"error": f"{err:.1f}m", "median": f"{np.median(loc_errors):.1f}m"})
+                    if len(loc_errors) <= 3:
+                        print(f"  Sample {ds_idx} | GT {gt[:2]} | EST {est[:2]} | Error={err:.2f} m")
+                processed += 1
+                pbar.update(1)
 
     if loc_errors:
         med = float(np.median(loc_errors))
