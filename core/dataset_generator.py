@@ -9,7 +9,7 @@
 import numpy as np
 import tensorflow as tf
 from config.settings import *
-from core.covert_injection import inject_covert_channel
+from core.covert_injection import inject_covert_channel, inject_covert_channel_fixed
 
 # Try to import NTN utilities
 try:
@@ -68,7 +68,8 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                                      ebno_db_range=(5, 15), 
                                      covert_rate_mbps_range=(1, 50),
                                      tle_path=None,
-                                     inject_attack_into_pathb=True):
+                                     inject_attack_into_pathb=True,
+                                     **kwargs):
     """
     Generate multi-satellite dataset with single-satellite insider attack.
 
@@ -85,6 +86,21 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         dict: Dataset (same keys as original implementation)
     """
 
+    # --------------------------------------------------------------------
+    # CRITICAL OVERRIDES (explicit per request)
+    #   - Force non-power-preserving covert injection to retain spectral cues
+    #   - Covert amplitude imported from settings.py
+    # --------------------------------------------------------------------
+    try:
+        # Mutate the shared settings dict so covert_injection sees it
+        ABLATION_CONFIG['power_preserving_covert'] = False
+    except Exception:
+        pass
+
+    # Import covert amplitude from centralized config (no hardcoding!)
+    from config.settings import COVERT_AMP
+    print(f"[Dataset] Using COVERT_AMP={COVERT_AMP} from settings.py")
+
     import numpy as np
     import tensorflow as tf
     from datetime import datetime, timezone
@@ -92,6 +108,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     all_iq, all_rxfreq, all_radar, all_labels, all_emit = [], [], [], [], []
     all_sat_recepts = []
     all_tx_time_padded = []
+    all_tx_grids = []  # ✅ NEW: Store OFDM grids for frequency-domain detection
 
     # Try to use constellation selector / leo_orbit if available
     USE_SGP4 = False
@@ -106,6 +123,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         USE_SGP4 = True
     except Exception:
         USE_SGP4 = False
+        # Note: LEO orbit module removed (detection-only mode)
 
     # Physical constants
     c0 = 3e8  # speed of light (m/s)
@@ -327,13 +345,30 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         # attacked waveform: copy + injection (if attack)
         tx_grid_attacked = tx_grid_clean
         if is_attack:
-            covert_rate = np.random.uniform(*covert_rate_mbps_range)
+            # increase covert throughput for stronger spectral footprint
+            covert_rate = 80.0  # 80 Mbps - افزایش throughput برای اثر طیفی قوی‌تر
+            
+            # 🐛 DEBUG: Print before injection
+            if idx < 3:  # Print first 3 attack samples
+                print(f"[Dataset] Sample {idx} (ATTACK): Calling inject_covert_channel_fixed(rate={covert_rate:.2f}, amp={COVERT_AMP})")
+            
             try:
-                out = inject_covert_channel(tf.identity(tx_grid_clean),
-                                           isac_system.rg,
-                                           covert_rate,
-                                           isac_system.SUBCARRIER_SPACING,
-                                           COVERT_AMP)
+                # ✅ Use explicit covert_amp (overrides defaults)
+                # Use FIXED-POSITION injection so detector can learn stable features
+                out = inject_covert_channel_fixed(tf.identity(tx_grid_clean),
+                                                  isac_system.rg,
+                                                  covert_rate,
+                                                  isac_system.SUBCARRIER_SPACING,
+                                                  covert_amp=COVERT_AMP,
+                                                  seed=42)
+                
+                # 🐛 DEBUG: Verify injection happened
+                if idx < 3:
+                    grid_before = tf.squeeze(tx_grid_clean).numpy()
+                    grid_after = tf.squeeze(out[0] if isinstance(out, tuple) else out).numpy()
+                    diff = np.abs(grid_after - grid_before).max()
+                    print(f"[Dataset] Sample {idx}: Injection done! Max diff={diff:.6f}")
+                
                 # inject_covert_channel may return (tx,info) or tx only
                 if isinstance(out, tuple) or isinstance(out, list):
                     tx_grid_attacked = out[0]
@@ -343,6 +378,14 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                 # fallback: keep clean if injection fails but still mark attack (rare)
                 print(f"[Dataset][WARN] inject_covert_channel failed: {e}. Proceeding with clean tx for attacked sat.")
                 tx_grid_attacked = tx_grid_clean
+        else:
+            # 🐛 DEBUG: Print benign samples too
+            if idx < 3:
+                print(f"[Dataset] Sample {idx} (BENIGN): No injection")
+        
+        # ✅ Store OFDM grid for frequency-domain detection (ensure complex64 for memory efficiency)
+        g = tx_grid_attacked.numpy().astype(np.complex64)
+        all_tx_grids.append(g)
 
         # -------------- compute tx_time and padded base (use clean base as canonical tx_time) --------------
         tx_time = isac_system.modulator(tx_grid_clean)
@@ -480,32 +523,22 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             rx_time_cropped = rx_time_padded_channel[:, delay_samp: delay_samp + signal_length]
             rx_grid_cropped = isac_system.demodulator(rx_time_cropped)
 
-            # 🔧 CRITICAL FIX: Path B must use CLEAN signal passed through CHANNEL
-            # - For localization, we need: RX = clean_signal * channel + noise
-            # - NOT: RX = attacked_signal * channel + noise
-            # - This ensures tx_time_padded (clean) correlates with rx_time_b_full
+            # 🔧 ULTIMATE FIX v2: Use the SAME tx_time_padded as reference!
+            # Problem: We were creating a NEW padded version, which differs from tx_time_padded
+            # Solution: Use the ALREADY CREATED tx_time_padded and just apply delay + noise
             
-            # ALWAYS use clean tx_grid for Path B (even for attacked satellites)
-            y_grid_channel_clean = tx_grid_clean * h_f  # Apply channel to CLEAN signal
+            # DON'T create new padding - use the existing one!
+            # tx_time_padded was created at line 358 with same max_delay_samp
             
-            # Convert to time domain
-            y_time_clean_channel = isac_system.modulator(y_grid_channel_clean)
-            y_time_clean_flat = tf.squeeze(y_time_clean_channel)
-            
-            # Pad and apply delay
-            y_time_clean_padded = tf.pad(
-                tf.expand_dims(y_time_clean_flat, 0),
-                [[0,0],[0,max_delay_samp]],
-                constant_values=0
-            )
-            rx_time_padded_clean_rolled = tf.roll(y_time_clean_padded, shift=delay_samp, axis=-1)
+            # Apply geometric delay by rolling the SAME padded reference
+            rx_time_padded_clean_rolled = tf.roll(tx_time_padded, shift=delay_samp, axis=-1)
 
-            # Add AWGN to Path B (match SNR used for Path A)
+            # Add AWGN to Path B (use SAME SNR as Path A)
             try:
-                rx_pow_clean = tf.reduce_mean(tf.abs(rx_time_padded_clean_rolled)**2)
-                rx_pow_clean = tf.maximum(rx_pow_clean, 1e-20)
+                rx_pow_pathb = tf.reduce_mean(tf.abs(rx_time_padded_clean_rolled)**2)
+                rx_pow_pathb = tf.maximum(rx_pow_pathb, 1e-20)
                 
-                sigma2_time = rx_pow_clean / esn0
+                sigma2_time = rx_pow_pathb / esn0
                 std_time = tf.sqrt(tf.cast(sigma2_time / 2.0, tf.float32))
                 noise_padded = tf.complex(
                     tf.random.normal(tf.shape(rx_time_padded_clean_rolled), stddev=std_time),
@@ -719,5 +752,6 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         'satellite_receptions': all_sat_recepts,
         'sampling_rate': isac_system.SAMPLING_RATE,
         'tx_time_padded': tx_time_padded_arr,
-        'rx_time_b_full': rx_time_b_full_arr
+        'rx_time_b_full': rx_time_b_full_arr,
+        'tx_grids': np.array(all_tx_grids)  # ✅ NEW: OFDM grids for frequency-domain detection
     }

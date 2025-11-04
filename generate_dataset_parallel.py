@@ -96,13 +96,15 @@ def worker_gpu(gpu_id, start_idx, end_idx, config, queue):
     
     dataset = generate_dataset_multi_satellite(
         isac,
-        num_samples_per_class=num_samples // 2,  # Half benign, half attack
+        num_samples_per_class=num_samples // 2,
         num_satellites=config['num_satellites'],
         ebno_db_range=config['ebno_range'],
         covert_rate_mbps_range=config['covert_rate_range'],
-        tle_path=config.get('tle_path'),                          # Pass TLE path for real Starlink positions
-        inject_attack_into_pathb=config.get('inject_attack_into_pathb', True)  # Attack in Path-B for attacked sat
+        tle_path=config.get('tle_path'),
+        inject_attack_into_pathb=config.get('inject_attack_into_pathb', True),
+        covert_amp=0.08  # ✅ اضافه کن این خط رو
     )
+
     
     # Add metadata
     dataset['_gpu_id'] = gpu_id
@@ -140,7 +142,8 @@ def merge_datasets(datasets):
         'emitter_locations': [],
         'satellite_receptions': [],
         'tx_time_padded': [],
-        'rx_time_b_full': []
+        'rx_time_b_full': [],
+        'tx_grids': []  # ✅ NEW: OFDM grids for frequency-domain detection
     }
 
     # === Merge from each worker ===
@@ -152,7 +155,7 @@ def merge_datasets(datasets):
         print(f"  Merging GPU {gpu_id} data (samples {start_idx}-{end_idx})...")
 
         # Merge all array-like fields (if they exist)
-        for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full']:
+        for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids']:
             if key in ds and ds[key] is not None:
                 merged[key].append(ds[key])
 
@@ -164,7 +167,7 @@ def merge_datasets(datasets):
 
     # === Concatenate all numpy arrays safely ===
     print("  Concatenating arrays...")
-    for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full']:
+    for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids']:
         if len(merged[key]) > 0:
             try:
                 # Check if shapes are consistent
@@ -208,8 +211,7 @@ def main():
         NUM_SAMPLES_PER_CLASS,
         NUM_SATELLITES_FOR_TDOA,
         DATASET_DIR,
-        USE_NTN_IF_AVAILABLE,
-        TLE_PATH
+        USE_NTN_IF_AVAILABLE
     )
     
     total_samples = NUM_SAMPLES_PER_CLASS * 2  # benign + attack
@@ -222,7 +224,7 @@ def main():
         'topology_cache_path': 'cache/ntn_topologies.pkl',  # Persistent cache file
         'ebno_range': (15, 25),        # 🔧 INCREASED from (5,15) to (15,25) for better SNR
         'covert_rate_range': (1, 50),
-        'tle_path': TLE_PATH,                      # TLE file path for real Starlink positions
+        'tle_path': None,              # TLE disabled (detection-only mode)
         'inject_attack_into_pathb': True           # Inject covert attack into Path-B for attacked satellite
     }
     
@@ -286,6 +288,13 @@ def main():
     print(f"Samples/min: {len(merged_dataset['labels']) / (total_time/60):.1f}")
     print(f"Saved to: {save_path}")
     print("="*60)
+    
+    # Print comprehensive dataset statistics
+    try:
+        from utils.dataset_stats import print_dataset_statistics
+        print_dataset_statistics(merged_dataset, detailed=True)
+    except Exception as e:
+        print(f"\n⚠️ Could not print detailed statistics: {e}")
 
 
 if __name__ == "__main__":

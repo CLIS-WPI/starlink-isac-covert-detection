@@ -160,47 +160,10 @@ class ISACSystem:
         """
         Initialize STNN models for fast TDOA/FDOA estimation.
         
-        ✅ NEW: Loads trained STNN models from paper's method
+        ✅ DISABLED: Detection-only mode (no localization)
         """
-        from config.settings import (
-            USE_STNN_LOCALIZATION,
-            STNN_TDOA_MODEL_PATH,
-            STNN_FDOA_MODEL_PATH,
-            STNN_ERROR_STATS_PATH
-        )
-        
-        if not USE_STNN_LOCALIZATION:
-            print("[ISAC] STNN localization disabled")
-            return
-        
-        try:
-            import pickle
-            from model.stnn_localization import STNNEstimator
-            
-            # Load STNN estimator
-            self.stnn_estimator = STNNEstimator(
-                tdoa_model_path=STNN_TDOA_MODEL_PATH,
-                fdoa_model_path=STNN_FDOA_MODEL_PATH
-            )
-            
-            # Load error statistics (from validation set)
-            if os.path.exists(STNN_ERROR_STATS_PATH):
-                with open(STNN_ERROR_STATS_PATH, 'rb') as f:
-                    stats = pickle.load(f)
-                
-                self.stnn_estimator.update_error_statistics(
-                    tdoa_std=stats['tdoa_std'],
-                    fdoa_std=stats['fdoa_std']
-                )
-                
-                print(f"[ISAC] ✓ STNN models loaded successfully")
-            else:
-                print(f"[ISAC] ⚠️  STNN error stats not found, using defaults")
-        
-        except Exception as e:
-            print(f"[ISAC] ⚠️  STNN initialization failed: {e}")
-            print("[ISAC] → Falling back to traditional GCC-PHAT")
-            self.stnn_estimator = None
+        # Silently skip STNN initialization (detection-only mode)
+        self.stnn_estimator = None
     
     def precompute_topologies(self, count=1000):
         """
