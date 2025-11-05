@@ -22,6 +22,7 @@ import pickle
 import argparse
 import numpy as np
 import tensorflow as tf
+from tensorflow.signal import stft
 from sklearn.model_selection import train_test_split
 
 # Suppress TF warnings
@@ -36,11 +37,74 @@ from config.settings import (
     DATASET_DIR,
     MODEL_DIR,
     RESULT_DIR,
-    SEED
+    SEED,
+    USE_SPECTROGRAM,
+    USE_FOCAL_LOSS,
+    FOCAL_LOSS_GAMMA,
+    FOCAL_LOSS_ALPHA
 )
 
 # CNN Detector
 from model.detector_cnn import CNNDetector
+
+
+def compute_spectrogram(grids):
+    """
+    Convert OFDM grids to spectrograms using STFT.
+    
+    Args:
+        grids: Complex OFDM grids (N, symbols, subcarriers, 1)
+    
+    Returns:
+        spectrograms: (N, freq_bins, time_frames, channels)
+    """
+    if not USE_SPECTROGRAM:
+        return grids
+    
+    print("  🔄 Computing spectrograms using STFT...")
+    
+    # Handle different input shapes
+    grids = np.squeeze(grids)  # Remove all size-1 dimensions
+    
+    # Ensure 3D: (N, symbols, subcarriers)
+    if grids.ndim == 2:
+        grids = grids[np.newaxis, :, :]
+    
+    N, symbols, subcarriers = grids.shape
+    
+    # Flatten to (N, symbols * subcarriers) for STFT
+    signals = grids.reshape(N, -1)
+    
+    # Convert complex to real by taking magnitude (IQ data)
+    # Or concatenate real/imag: (N, 2 * len)
+    signals_real = np.abs(signals).astype(np.float32)
+    
+    # Convert to TensorFlow tensors
+    signals_tf = tf.constant(signals_real, dtype=tf.float32)
+    
+    # Apply STFT: frame_length=128, frame_step=64
+    frame_length = 128
+    frame_step = 64
+    fft_length = 256
+    
+    spectrograms = stft(
+        signals_tf,
+        frame_length=frame_length,
+        frame_step=frame_step,
+        fft_length=fft_length
+    )
+    
+    # Take magnitude: (N, time_frames, freq_bins)
+    spectrograms = tf.abs(spectrograms).numpy()
+    
+    # Transpose to (N, freq_bins, time_frames)
+    spectrograms = np.transpose(spectrograms, (0, 2, 1))
+    
+    # Add channel dimension: (N, freq_bins, time_frames, 1)
+    spectrograms = np.expand_dims(spectrograms, axis=-1)
+    
+    print(f"  ✓ Spectrogram shape: {spectrograms.shape}")
+    return spectrograms
 
 
 def main(use_csi=False, epochs=50, batch_size=32):
@@ -105,6 +169,13 @@ def main(use_csi=False, epochs=50, batch_size=32):
     X_grids = dataset['tx_grids']  # OFDM grids
     Y = dataset['labels']
     
+    # Apply spectrogram transform if enabled
+    if USE_SPECTROGRAM:
+        print(f"\n{'='*70}")
+        print("[Phase 1.5] Computing Spectrograms...")
+        print(f"{'='*70}")
+        X_grids = compute_spectrogram(X_grids)
+    
     X_csi = None
     if use_csi and 'csi' in dataset:
         X_csi = dataset['csi']
@@ -146,6 +217,35 @@ def main(use_csi=False, epochs=50, batch_size=32):
         'difference_pct': float(power_diff_pct)
     }
     
+    # ===== Phase 2.5: Pattern Injection Verification =====
+    print(f"\n{'='*70}")
+    print("[Phase 2.5] Pattern Injection Verification...")
+    print(f"{'='*70}")
+    
+    # Calculate mean absolute difference between attack and benign
+    mean_abs_diff = np.mean(np.abs(attack_grids - benign_grids))
+    max_abs_diff = np.max(np.abs(attack_grids - benign_grids))
+    
+    print(f"  ✓ Mean abs difference: {mean_abs_diff:.6f}")
+    print(f"  ✓ Max abs difference:  {max_abs_diff:.6f}")
+    print(f"  ✓ Dataset keys: {list(dataset.keys())}")
+    
+    # Check if pattern is actually injected
+    if mean_abs_diff < 0.02:
+        print(f"  ⚠️  WARNING: Mean difference < 0.02!")
+        print(f"      → Pattern may NOT be injected properly")
+        print(f"      → Check RANDOMIZE_* settings (must be False)")
+        print(f"      → Check USE_SEMI_FIXED_PATTERN = True")
+    else:
+        print(f"  ✅ Pattern successfully injected (diff ≥ 0.02)")
+    
+    # Additional stats
+    print(f"\n  📊 Additional Statistics:")
+    print(f"     Benign mean: {np.mean(benign_grids):.6f}")
+    print(f"     Attack mean: {np.mean(attack_grids):.6f}")
+    print(f"     Benign std:  {np.std(benign_grids):.6f}")
+    print(f"     Attack std:  {np.std(attack_grids):.6f}")
+    
     # ===== Phase 3: Train/Test Split =====
     print(f"\n{'='*70}")
     print("[Phase 3] Splitting dataset...")
@@ -185,7 +285,10 @@ def main(use_csi=False, epochs=50, batch_size=32):
         use_csi=use_csi,
         learning_rate=0.001,
         dropout_rate=0.3,
-        random_state=SEED
+        random_state=SEED,
+        use_focal_loss=USE_FOCAL_LOSS,
+        focal_gamma=FOCAL_LOSS_GAMMA,
+        focal_alpha=FOCAL_LOSS_ALPHA
     )
     
     # Train with validation split
@@ -205,6 +308,12 @@ def main(use_csi=False, epochs=50, batch_size=32):
             random_state=SEED
         )
         X_csi_tr, X_csi_val = None, None
+    
+    # Debug: Show training data info
+    print(f"\n🔍 Training Data Info:")
+    print(f"   X_tr shape: {X_tr.shape}")
+    print(f"   Attack power: {np.mean(np.abs(X_tr[y_tr==1])):.6f}")
+    print(f"   Benign power: {np.mean(np.abs(X_tr[y_tr==0])):.6f}")
     
     history = detector.train(
         X_tr, y_tr, X_csi_train=X_csi_tr,

@@ -29,6 +29,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, models, regularizers
+from tensorflow.keras.losses import BinaryFocalCrossentropy
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 import pickle
 
@@ -45,7 +46,8 @@ class CNNDetector:
     """
     
     def __init__(self, use_csi=False, input_shape=None, csi_shape=None, 
-                 learning_rate=0.001, dropout_rate=0.3, random_state=42):
+                 learning_rate=0.001, dropout_rate=0.3, random_state=42,
+                 use_focal_loss=False, focal_gamma=2.0, focal_alpha=0.25):
         """
         Initialize CNN detector.
         
@@ -56,6 +58,9 @@ class CNNDetector:
             learning_rate: Adam optimizer learning rate
             dropout_rate: Dropout probability for regularization
             random_state: Random seed for reproducibility
+            use_focal_loss: Use focal loss instead of binary crossentropy
+            focal_gamma: Focal loss gamma (focus on hard examples)
+            focal_alpha: Focal loss alpha (class weight)
         """
         self.use_csi = use_csi
         self.input_shape = input_shape
@@ -63,6 +68,9 @@ class CNNDetector:
         self.learning_rate = learning_rate
         self.dropout_rate = dropout_rate
         self.random_state = random_state
+        self.use_focal_loss = use_focal_loss
+        self.focal_gamma = focal_gamma
+        self.focal_alpha = focal_alpha
         
         self.model = None
         self.is_trained = False
@@ -199,9 +207,20 @@ class CNNDetector:
                                name="CNN_Detector")
         
         # Compile model
+        # Use Focal Loss if enabled (better for hard examples)
+        if self.use_focal_loss:
+            loss = BinaryFocalCrossentropy(
+                gamma=self.focal_gamma,
+                alpha=self.focal_alpha,
+                from_logits=False  # We use sigmoid activation
+            )
+            print(f"  ✓ Using Focal Loss (gamma={self.focal_gamma}, alpha={self.focal_alpha})")
+        else:
+            loss = 'binary_crossentropy'
+        
         model.compile(
             optimizer=keras.optimizers.Adam(learning_rate=self.learning_rate),
-            loss='binary_crossentropy',
+            loss=loss,
             metrics=['accuracy', keras.metrics.AUC(name='auc')]
         )
         

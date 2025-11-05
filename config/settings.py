@@ -16,7 +16,8 @@ SEED = 42  # Random seed for reproducibility
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 1500  # Number of samples per class (clean and covert)
+NUM_SAMPLES_PER_CLASS = 500
+                               # With augmentation, effective samples = 6000 per class
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"
 MODEL_DIR = "model"
@@ -26,7 +27,7 @@ RESULT_DIR = "result"
 # 🧪 Detection Settings
 # ======================================
 ABLATION_CONFIG = {
-    'power_preserving_covert': False  # ⚠️ CRITICAL: Must be False for detection!
+    'power_preserving_covert': True  # ✅ برعکس شد - حالا CNN بهتر یاد می‌گیره!
 }
 
 # =======================================================
@@ -34,23 +35,34 @@ ABLATION_CONFIG = {
 # =======================================================
 
 # Covert channel injection parameters
-COVERT_AMP = 1.8  # 🎯 شدت تزریق (اختلاف توان ~3-4%)
-                   # این مقدار برای یادگیری CNN بهینه شده
-                   # بعد از AUC > 0.85 می‌توان به 1.2-1.4 کاهش داد
+COVERT_AMP = 0.2  # 🎯 کاهش شدید - برای power preservation واقعی
+                   # با این مقدار: power diff < 2% و pattern هنوز detectable
+                   # بعد از AUC > 0.85 می‌توان به 0.1 کاهش داد
 
 # 🎯 SEMI-FIXED PATTERN STRATEGY (for better CNN learning)
 # Instead of fully random, use controlled patterns that CNN can learn
 USE_SEMI_FIXED_PATTERN = True  # Enable semi-fixed injection pattern
 
+# 🔬 ADVANCED FEATURES (Multi-modal Learning)
+CSI_FUSION = True
+USE_SPECTROGRAM = False  # ❌ خاموش - magnitude-only STFT از pattern info می‌افته
+SPECTROGRAM_TYPE = "stft"      # Options: "stft", "mel", "both"
+USE_PHASE_FEATURES = True      # 🆕 Extract phase and cyclostationary features
+USE_RESIDUAL_CNN = True
+
 # Contiguous band injection (more spectral signature)
 NUM_COVERT_SUBCARRIERS = 16   # 🎯 Reduced from 32 to 16 for stronger per-subcarrier energy
 BAND_SIZE = 8                  # 🎯 باند پیوسته کوچک (SUBBAND_SIZE)
-BAND_START_OPTIONS = [0, 16, 32, 48]  # 🎯 چهار موقعیت نیمه‌ثابت (بیشتر پخش شده)
+BAND_START_OPTIONS = list(range(0, 48, 4))  # 🎯 12 موقعیت - بیشتر diversity
 
-# Symbol pattern options (semi-fixed)
+# Symbol pattern options (semi-fixed) - 6 patterns for more diversity
 SYMBOL_PATTERN_OPTIONS = [
-    [1, 3, 5, 7],    # الگوی ۱ (سمبل‌های فرد)
-    [2, 4, 6, 8]     # الگوی ۲ (سمبل‌های زوج)
+    [1, 3, 5, 7],           # الگوی ۱ (سمبل‌های فرد)
+    [2, 4, 6, 8],           # الگوی ۲ (سمبل‌های زوج)
+    [0, 1, 4, 5, 8, 9],     # الگوی ۳ (paired)
+    [2, 3, 6, 7],           # الگوی ۴ (middle)
+    [0, 1, 2, 3, 4],        # الگوی ۵ (first half)
+    [5, 6, 7, 8, 9]         # الگوی ۶ (second half)
 ]
 # Alias for compatibility
 SYMBOL_PATTERNS = SYMBOL_PATTERN_OPTIONS
@@ -66,7 +78,14 @@ NUM_INJECT_SYMBOLS = 7        # 🎯 How many symbols to inject covert signal in
 
 # Noise control (for robustness testing)
 ADD_NOISE = True   # 🔧 فعال‌سازی نویز برای واقع‌گرایی
-NOISE_STD = 0.015  # 🎯 مقدار نویز ملایم (Gaussian noise standard deviation)
+NOISE_STD = 0.01  # 🎯 کاهش نویز برای یادگیری بهتر
+
+# 🎯 ADVANCED TRAINING SETTINGS
+USE_FOCAL_LOSS = True
+FOCAL_LOSS_GAMMA = 2.0         # Focus on hard examples
+FOCAL_LOSS_ALPHA = 0.25        # Class weighting
+USE_DATA_AUGMENTATION = True   # 🆕 Apply data augmentation
+AUGMENTATION_FACTOR = 1        # Generate 2x more samples via augmentation
 
 VALIDATION_SPLIT = 0.3  # 30% for test set
 

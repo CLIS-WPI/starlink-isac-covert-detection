@@ -333,10 +333,17 @@ def inject_covert_semi_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
     ofdm_np = ofdm_frame.numpy()
     cs = covert_syms.numpy()[0]
 
+    # 🎯 Weighted combination instead of pure additive
+    # This preserves power better while keeping pattern detectable
+    alpha = 0.7  # Original signal weight
+    beta = 0.3   # Covert signal weight (controlled by COVERT_AMP)
+    
     for s in selected_symbols:
         for k, sc in enumerate(selected_subcarriers):
-            # Additive injection (stronger spectral signature)
-            ofdm_np[0, 0, 0, s, sc] += complex(np.asarray(cs[k % cs.shape[0]]).item())
+            # Weighted combination: keeps power stable, pattern clear
+            original = ofdm_np[0, 0, 0, s, sc]
+            covert = complex(np.asarray(cs[k % cs.shape[0]]).item())
+            ofdm_np[0, 0, 0, s, sc] = alpha * original + beta * covert
 
     # 🔍 DEBUG: Print injection details
     if not hasattr(inject_covert_semi_fixed, '_debug_count'):
