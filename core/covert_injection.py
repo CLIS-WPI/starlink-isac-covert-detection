@@ -127,13 +127,20 @@ def inject_covert_channel(ofdm_frame, resource_grid, covert_rate_mbps,
 def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
                                 scs, covert_amp=None, seed=42):
     """
-    Inject covert QPSK symbols at FIXED positions (deterministic by seed).
+    Inject covert QPSK symbols at RANDOMIZED positions (when enabled in settings).
 
     Args:
         covert_amp: Amplitude scaling (default: use COVERT_AMP from settings.py)
-        seed: Fixed seed for selecting subcarriers/symbols
+        seed: Fixed seed for selecting subcarriers/symbols (ignored if randomization enabled)
     Returns: (ofdm_with_covert, emitter_location)
     """
+    from config.settings import (
+        RANDOMIZE_SUBCARRIERS, 
+        RANDOMIZE_SYMBOLS,
+        MAX_SUBCARRIERS,
+        NUM_INJECT_SYMBOLS
+    )
+    
     # Use centralized config if not explicitly provided
     if covert_amp is None:
         covert_amp = COVERT_AMP
@@ -155,23 +162,34 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
     n_subs = int((covert_rate_mbps * 1e6) / bps_per_sub)
     n_subs = max(1, min(n_subs, resource_grid.num_effective_subcarriers // 2))
 
-    # Fixed subcarrier selection by seed (DENSER selection for stronger footprint)
-    np.random.seed(seed)
-    all_indices = np.arange(resource_grid.num_effective_subcarriers)
-
-    # choose more subs with denser distribution (×5 for maximum coverage)
-    step = max(1, len(all_indices) // (n_subs * 5))  # denser -> more subcarriers injected
-    selected_subcarriers = all_indices[::step][:n_subs]
-
-    # Inject across more OFDM symbols (middle region) but keep deterministic
-    if num_ofdm_symbols >= 10:
-        selected_symbols = list(range(1, min(num_ofdm_symbols-1, 8)))  # up to 7 middle symbols
-    elif num_ofdm_symbols >= 7:
-        selected_symbols = [1,2,3,4]
-    elif num_ofdm_symbols >= 3:
-        selected_symbols = [1,2]
+    # ✅ CONTROLLED RANDOMIZATION: Limited to MAX_SUBCARRIERS for pattern consistency
+    if RANDOMIZE_SUBCARRIERS:
+        # Limit to first MAX_SUBCARRIERS (e.g., 48 out of 64) for consistent pattern region
+        max_sc = min(MAX_SUBCARRIERS, resource_grid.num_effective_subcarriers)
+        available_indices = np.arange(max_sc)
+        selected_subcarriers = np.random.choice(available_indices, size=min(n_subs, len(available_indices)), replace=False)
     else:
-        selected_symbols = [0]
+        # Original fixed behavior
+        np.random.seed(seed)
+        all_indices = np.arange(resource_grid.num_effective_subcarriers)
+        step = max(1, len(all_indices) // (n_subs * 5))
+        selected_subcarriers = all_indices[::step][:n_subs]
+
+    # ✅ CONTROLLED RANDOMIZATION: Fixed number of symbols for consistency
+    if RANDOMIZE_SYMBOLS:
+        # Always inject into NUM_INJECT_SYMBOLS (e.g., 7) symbols, but vary which ones
+        num_to_inject = min(NUM_INJECT_SYMBOLS, num_ofdm_symbols)
+        selected_symbols = np.random.choice(num_ofdm_symbols, size=num_to_inject, replace=False).tolist()
+    else:
+        # Original fixed behavior
+        if num_ofdm_symbols >= 10:
+            selected_symbols = list(range(1, min(num_ofdm_symbols-1, 8)))
+        elif num_ofdm_symbols >= 7:
+            selected_symbols = [1,2,3,4]
+        elif num_ofdm_symbols >= 3:
+            selected_symbols = [1,2]
+        else:
+            selected_symbols = [0]
 
     # Generate covert data (data random, positions fixed)
     covert_bits = tf.random.uniform(
@@ -188,11 +206,18 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
         for k, sc in enumerate(selected_subcarriers):
             ofdm_np[0, 0, 0, s, sc] += complex(np.asarray(cs[k % cs.shape[0]]).item())
 
-    # 🔍 DEBUG مورد 2: چاپ دقیق اندیس‌های تزریق
-    print(
-        f"  [Covert-Fixed] Injected {len(selected_subcarriers)} subcarriers at symbols {selected_symbols} with amp={covert_amp}"
-    )
-    print(f"  🔍 DEBUG injection: symbols={selected_symbols}, subcarriers=[{selected_subcarriers[0]}..{selected_subcarriers[-1]}], step={step}")
+    # 🔍 DEBUG: Print injection details
+    mode = "RANDOMIZED" if (RANDOMIZE_SUBCARRIERS or RANDOMIZE_SYMBOLS) else "FIXED"
+    if not hasattr(inject_covert_channel_fixed, '_debug_count'):
+        inject_covert_channel_fixed._debug_count = 0
+    inject_covert_channel_fixed._debug_count += 1
+    
+    if inject_covert_channel_fixed._debug_count <= 3:  # Print first 3 injections
+        print(
+            f"  [Covert-{mode}] Sample #{inject_covert_channel_fixed._debug_count}: "
+            f"{len(selected_subcarriers)} subcarriers, {len(selected_symbols)} symbols, amp={covert_amp}"
+        )
+        print(f"  🔍 symbols={selected_symbols}, subcarriers={sorted(selected_subcarriers)[:10]}{'...' if len(selected_subcarriers) > 10 else ''}")
 
     emitter_location = (
         np.random.uniform(-1000, 1000),
@@ -226,3 +251,109 @@ def get_covert_mask(resource_grid, num_covert_subcarriers=10, seed=42):
         if s < n_sym:
             mask[s, selected_subcarriers] = 1
     return mask
+
+
+# ======================================
+# 🎯 SEMI-FIXED PATTERN INJECTION
+# ======================================
+
+def inject_covert_semi_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
+                              scs, covert_amp=None):
+    """
+    🎯 Semi-fixed pattern injection for better CNN learning.
+    
+    Strategy:
+    - Uses contiguous bands (e.g., 8 consecutive subcarriers)
+    - Band starting position chosen from limited options (e.g., 0, 8, 16, 24)
+    - Symbol pattern chosen from 2 options (odd vs even symbols)
+    - Creates recognizable pattern while maintaining diversity
+    
+    Args:
+        ofdm_frame: OFDM resource grid
+        resource_grid: Resource grid configuration
+        covert_rate_mbps: Covert channel rate (not used directly in semi-fixed mode)
+        scs: Subcarrier spacing
+        covert_amp: Amplitude scaling (default: use COVERT_AMP from settings.py)
+    
+    Returns:
+        (ofdm_with_covert, emitter_location)
+    """
+    from config.settings import (
+        BAND_SIZE,
+        BAND_START_OPTIONS,
+        SYMBOL_PATTERN_OPTIONS,
+        NUM_COVERT_SUBCARRIERS
+    )
+    
+    # Use centralized config if not explicitly provided
+    if covert_amp is None:
+        covert_amp = COVERT_AMP
+    
+    if covert_rate_mbps <= 0.0:
+        return ofdm_frame, None
+
+    batch_size = ofdm_frame.shape[0]
+    num_ofdm_symbols = int(ofdm_frame.shape[-2])
+
+    # 🎯 Semi-fixed subcarrier selection: Contiguous bands
+    # Select random starting position from limited options
+    band_start = np.random.choice(BAND_START_OPTIONS)
+    
+    # Create multiple contiguous bands
+    num_bands = NUM_COVERT_SUBCARRIERS // BAND_SIZE
+    selected_subcarriers = []
+    
+    for i in range(num_bands):
+        band_offset = i * BAND_SIZE
+        band_base = (band_start + band_offset) % resource_grid.num_effective_subcarriers
+        # Add BAND_SIZE consecutive subcarriers
+        for j in range(BAND_SIZE):
+            sc = (band_base + j) % resource_grid.num_effective_subcarriers
+            if sc < resource_grid.num_effective_subcarriers:
+                selected_subcarriers.append(sc)
+    
+    selected_subcarriers = np.array(selected_subcarriers[:NUM_COVERT_SUBCARRIERS])
+
+    # 🎯 Semi-fixed symbol selection: Choose from pattern options
+    symbol_pattern_idx = np.random.choice(len(SYMBOL_PATTERN_OPTIONS))
+    selected_symbols = SYMBOL_PATTERN_OPTIONS[symbol_pattern_idx]
+    
+    # Filter symbols that exist in this OFDM frame
+    selected_symbols = [s for s in selected_symbols if s < num_ofdm_symbols]
+
+    # Generate covert QPSK symbols
+    bits_per_symbol = 2  # QPSK
+    covert_bits = tf.random.uniform(
+        [batch_size, len(selected_subcarriers), bits_per_symbol], 0, 2, dtype=tf.int32
+    )
+    covert_mapper = Mapper("qam", bits_per_symbol)
+    covert_syms = covert_mapper(covert_bits) * tf.cast(covert_amp, tf.complex64)
+
+    # Inject into OFDM frame
+    ofdm_np = ofdm_frame.numpy()
+    cs = covert_syms.numpy()[0]
+
+    for s in selected_symbols:
+        for k, sc in enumerate(selected_subcarriers):
+            # Additive injection (stronger spectral signature)
+            ofdm_np[0, 0, 0, s, sc] += complex(np.asarray(cs[k % cs.shape[0]]).item())
+
+    # 🔍 DEBUG: Print injection details
+    if not hasattr(inject_covert_semi_fixed, '_debug_count'):
+        inject_covert_semi_fixed._debug_count = 0
+    inject_covert_semi_fixed._debug_count += 1
+    
+    if inject_covert_semi_fixed._debug_count <= 3:
+        print(
+            f"  [Covert-SemiFix] Sample #{inject_covert_semi_fixed._debug_count}: "
+            f"band_start={band_start}, pattern={symbol_pattern_idx}, amp={covert_amp}"
+        )
+        print(f"  🎯 symbols={selected_symbols}, subcarriers={sorted(selected_subcarriers)}")
+
+    emitter_location = (
+        np.random.uniform(-1000, 1000),
+        np.random.uniform(-1000, 1000),
+        0.0,
+    )
+
+    return tf.convert_to_tensor(ofdm_np), emitter_location

@@ -275,7 +275,7 @@ class CNNDetector:
     
     def train(self, X_train, y_train, X_csi_train=None,
               X_val=None, y_val=None, X_csi_val=None,
-              epochs=50, batch_size=32, verbose=1):
+              epochs=50, batch_size=32, verbose=1, class_weight=None):
         """
         Train the CNN detector.
         
@@ -289,10 +289,31 @@ class CNNDetector:
             epochs: Number of training epochs
             batch_size: Training batch size
             verbose: Verbosity (0=silent, 1=progress, 2=epoch)
+            class_weight: Dictionary of class weights {0: w0, 1: w1} for handling imbalance
+                         Default: {0: 1.0, 1: 1.0} (balanced)
         
         Returns:
             history: Training history
         """
+        # 🎯 Class weights: Default to balanced, can be adjusted if needed
+        if class_weight is None:
+            class_weight = {0: 1.0, 1: 1.0}
+        
+        # Check class balance and warn if needed
+        unique, counts = np.unique(y_train, return_counts=True)
+        class_dist = dict(zip(unique, counts))
+        print(f"\n📊 Class distribution in training set:")
+        print(f"   Class 0 (benign): {class_dist.get(0, 0)} samples")
+        print(f"   Class 1 (attack): {class_dist.get(1, 0)} samples")
+        
+        if len(class_dist) == 2:
+            imbalance_ratio = max(counts) / min(counts)
+            if imbalance_ratio > 1.5:
+                print(f"   ⚠️  Class imbalance detected (ratio: {imbalance_ratio:.2f})")
+                print(f"   Consider adjusting class_weight parameter")
+        
+        print(f"   Using class weights: {class_weight}")
+        
         # Preprocess OFDM data
         X_train_proc = self._preprocess_ofdm(X_train)
         
@@ -355,12 +376,14 @@ class CNNDetector:
         print(f"   Training samples: {len(y_train)}")
         print(f"   Batch size: {batch_size}")
         print(f"   Using CSI fusion: {self.use_csi}")
+        print(f"   Class weights: {class_weight}")
         
         self.history = self.model.fit(
             train_data, y_train,
             validation_data=validation_data,
             epochs=epochs,
             batch_size=batch_size,
+            class_weight=class_weight,  # 🎯 Apply class weights to prevent bias
             callbacks=callbacks,
             verbose=verbose
         )

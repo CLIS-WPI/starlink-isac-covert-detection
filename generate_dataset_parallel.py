@@ -102,7 +102,7 @@ def worker_gpu(gpu_id, start_idx, end_idx, config, queue):
         covert_rate_mbps_range=config['covert_rate_range'],
         tle_path=config.get('tle_path'),
         inject_attack_into_pathb=config.get('inject_attack_into_pathb', True),
-        covert_amp=0.08  # ✅ اضافه کن این خط رو
+        covert_amp=config.get('covert_amp', 0.8)  # ✅ Use value from config (synchronized with settings.py)
     )
 
     
@@ -211,7 +211,8 @@ def main():
         NUM_SAMPLES_PER_CLASS,
         NUM_SATELLITES_FOR_TDOA,
         DATASET_DIR,
-        USE_NTN_IF_AVAILABLE
+        USE_NTN_IF_AVAILABLE,
+        COVERT_AMP
     )
     
     total_samples = NUM_SAMPLES_PER_CLASS * 2  # benign + attack
@@ -224,6 +225,7 @@ def main():
         'topology_cache_path': 'cache/ntn_topologies.pkl',  # Persistent cache file
         'ebno_range': (15, 25),        # 🔧 INCREASED from (5,15) to (15,25) for better SNR
         'covert_rate_range': (1, 50),
+        'covert_amp': COVERT_AMP,      # ✅ Use value from settings.py (e.g., 0.8)
         'tle_path': None,              # TLE disabled (detection-only mode)
         'inject_attack_into_pathb': True           # Inject covert attack into Path-B for attacked satellite
     }

@@ -11,11 +11,12 @@ import numpy as np
 # ======================================
 USE_NTN_IF_AVAILABLE = True
 GPU_INDEX = 0
+SEED = 42  # Random seed for reproducibility
 
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 100  # برای تست سریع -> کل 200 نمونه
+NUM_SAMPLES_PER_CLASS = 1500  # Number of samples per class (clean and covert)
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"
 MODEL_DIR = "model"
@@ -28,13 +29,44 @@ ABLATION_CONFIG = {
     'power_preserving_covert': False  # ⚠️ CRITICAL: Must be False for detection!
 }
 
+# =======================================================
+# 💡 Covert Injection Settings (Semi-Fixed Pattern)
+# =======================================================
+
 # Covert channel injection parameters
-COVERT_AMP = 0.55  # Increased for CNN testing: ~5-7% power difference
-                   # Once CNN works, reduce back to 0.45 for true covert testing
+COVERT_AMP = 1.8  # 🎯 شدت تزریق (اختلاف توان ~3-4%)
+                   # این مقدار برای یادگیری CNN بهینه شده
+                   # بعد از AUC > 0.85 می‌توان به 1.2-1.4 کاهش داد
+
+# 🎯 SEMI-FIXED PATTERN STRATEGY (for better CNN learning)
+# Instead of fully random, use controlled patterns that CNN can learn
+USE_SEMI_FIXED_PATTERN = True  # Enable semi-fixed injection pattern
+
+# Contiguous band injection (more spectral signature)
+NUM_COVERT_SUBCARRIERS = 16   # 🎯 Reduced from 32 to 16 for stronger per-subcarrier energy
+BAND_SIZE = 8                  # 🎯 باند پیوسته کوچک (SUBBAND_SIZE)
+BAND_START_OPTIONS = [0, 16, 32, 48]  # 🎯 چهار موقعیت نیمه‌ثابت (بیشتر پخش شده)
+
+# Symbol pattern options (semi-fixed)
+SYMBOL_PATTERN_OPTIONS = [
+    [1, 3, 5, 7],    # الگوی ۱ (سمبل‌های فرد)
+    [2, 4, 6, 8]     # الگوی ۲ (سمبل‌های زوج)
+]
+# Alias for compatibility
+SYMBOL_PATTERNS = SYMBOL_PATTERN_OPTIONS
+SUBBAND_SIZE = BAND_SIZE  # Alias for documentation consistency
+
+# ⚠️ CRITICAL: Disable randomization when using semi-fixed pattern!
+# Legacy randomization (ONLY used if USE_SEMI_FIXED_PATTERN = False)
+RANDOMIZE_SUBCARRIERS = False  # ❌ غیرفعال - must be False for semi-fixed pattern to work
+RANDOMIZE_SYMBOLS = False      # ❌ غیرفعال - must be False for semi-fixed pattern to work
+MAX_SUBCARRIERS = 48          # 🎯 Limit randomization to first 48 (not all 64) for pattern consistency
+MAX_SYMBOLS = 10              # 🎯 Total OFDM symbols available
+NUM_INJECT_SYMBOLS = 7        # 🎯 How many symbols to inject covert signal into
 
 # Noise control (for robustness testing)
-# 🔍 DEBUG Item 4: Temporarily disabled for testing (if AUC jumps → noise is the issue)
-ADD_NOISE = False   # ⚠️ TEMPORARILY DISABLED for debugging
+ADD_NOISE = True   # 🔧 فعال‌سازی نویز برای واقع‌گرایی
+NOISE_STD = 0.015  # 🎯 مقدار نویز ملایم (Gaussian noise standard deviation)
 
 VALIDATION_SPLIT = 0.3  # 30% for test set
 

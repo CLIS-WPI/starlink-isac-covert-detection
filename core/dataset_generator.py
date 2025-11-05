@@ -9,7 +9,7 @@
 import numpy as np
 import tensorflow as tf
 from config.settings import *
-from core.covert_injection import inject_covert_channel, inject_covert_channel_fixed
+from core.covert_injection import inject_covert_channel, inject_covert_channel_fixed, inject_covert_semi_fixed
 
 # Try to import NTN utilities
 try:
@@ -350,17 +350,27 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             
             # 🐛 DEBUG: Print before injection
             if idx < 3:  # Print first 3 attack samples
-                print(f"[Dataset] Sample {idx} (ATTACK): Calling inject_covert_channel_fixed(rate={covert_rate:.2f}, amp={COVERT_AMP})")
+                print(f"[Dataset] Sample {idx} (ATTACK): Calling covert injection (rate={covert_rate:.2f}, amp={COVERT_AMP})")
             
             try:
-                # ✅ Use explicit covert_amp (overrides defaults)
-                # Use FIXED-POSITION injection so detector can learn stable features
-                out = inject_covert_channel_fixed(tf.identity(tx_grid_clean),
-                                                  isac_system.rg,
-                                                  covert_rate,
-                                                  isac_system.SUBCARRIER_SPACING,
-                                                  covert_amp=COVERT_AMP,
-                                                  seed=42)
+                # ✅ Choose injection method based on configuration
+                from config.settings import USE_SEMI_FIXED_PATTERN
+                
+                if USE_SEMI_FIXED_PATTERN:
+                    # 🎯 Use semi-fixed pattern for better CNN learning
+                    out = inject_covert_semi_fixed(tf.identity(tx_grid_clean),
+                                                    isac_system.rg,
+                                                    covert_rate,
+                                                    isac_system.SUBCARRIER_SPACING,
+                                                    covert_amp=COVERT_AMP)
+                else:
+                    # Use controlled randomization (previous approach)
+                    out = inject_covert_channel_fixed(tf.identity(tx_grid_clean),
+                                                      isac_system.rg,
+                                                      covert_rate,
+                                                      isac_system.SUBCARRIER_SPACING,
+                                                      covert_amp=COVERT_AMP,
+                                                      seed=42)
                 
                 # 🐛 DEBUG: Verify injection happened
                 if idx < 3:
