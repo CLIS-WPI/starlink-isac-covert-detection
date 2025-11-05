@@ -143,7 +143,8 @@ def merge_datasets(datasets):
         'satellite_receptions': [],
         'tx_time_padded': [],
         'rx_time_b_full': [],
-        'tx_grids': []  # ✅ NEW: OFDM grids for frequency-domain detection
+        'tx_grids': [],   # ✅ Pre-channel OFDM grids (clean)
+        'rx_grids': []    # ✅ Post-channel OFDM grids (with channel effects + injection)
     }
 
     # === Merge from each worker ===
@@ -155,7 +156,7 @@ def merge_datasets(datasets):
         print(f"  Merging GPU {gpu_id} data (samples {start_idx}-{end_idx})...")
 
         # Merge all array-like fields (if they exist)
-        for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids']:
+        for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids', 'rx_grids']:
             if key in ds and ds[key] is not None:
                 merged[key].append(ds[key])
 
@@ -167,7 +168,7 @@ def merge_datasets(datasets):
 
     # === Concatenate all numpy arrays safely ===
     print("  Concatenating arrays...")
-    for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids']:
+    for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids', 'rx_grids']:
         if len(merged[key]) > 0:
             try:
                 # Check if shapes are consistent

@@ -49,12 +49,12 @@ def inject_covert_channel(ofdm_frame, resource_grid, covert_rate_mbps,
     # Stronger footprint: double subcarriers, up to 50% of spectrum
     strong_subs = min(base_subs * 2, resource_grid.num_effective_subcarriers // 2)
 
-    # Generate random QPSK covert symbols with amplitude boost (×2)
+    # Generate random QPSK covert symbols
     covert_bits = tf.random.uniform(
         [batch_size, strong_subs, bits_per_symbol], 0, 2, dtype=tf.int32
     )
     covert_mapper = Mapper("qam", bits_per_symbol)
-    covert_syms = covert_mapper(covert_bits) * tf.cast(covert_amp * 2.0, tf.complex64)
+    covert_syms = covert_mapper(covert_bits) * tf.cast(covert_amp, tf.complex64)  # ✅ No 2.0 multiplication
 
     # Candidate subcarriers: every other subcarrier
     all_indices = np.arange(resource_grid.num_effective_subcarriers)
@@ -71,16 +71,15 @@ def inject_covert_channel(ofdm_frame, resource_grid, covert_rate_mbps,
     ofdm_np = ofdm_frame.numpy()
     cs = covert_syms.numpy()[0]
 
-    # Force power preservation OFF for detection (override config)
-    _cfg_power_preserving = ABLATION_CONFIG.get('power_preserving_covert', False)
-    power_preserving = False
+    # ✅ RESPECT ABLATION_CONFIG setting (no hard-coded override!)
+    power_preserving = ABLATION_CONFIG.get('power_preserving_covert', False)
 
     # 🐛 DEBUG: Print first call with effective config
     if not hasattr(inject_covert_channel, '_debug_printed'):
-        print(f"  [Covert] DEBUG: power_preserving={power_preserving} (cfg={_cfg_power_preserving}), covert_amp={covert_amp}")
+        print(f"  [Covert] Power-preserving: {power_preserving}, covert_amp={covert_amp}")
         inject_covert_channel._debug_printed = True
 
-    # Optionally compute original power (won't be used when forced False)
+    # Compute original power if preservation is enabled
     orig_power = None
     if power_preserving:
         try:
@@ -333,6 +332,14 @@ def inject_covert_semi_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
     ofdm_np = ofdm_frame.numpy()
     cs = covert_syms.numpy()[0]
 
+    # ✅ Check power preservation setting
+    power_preserving = ABLATION_CONFIG.get('power_preserving_covert', False)
+    
+    # Store original power if needed
+    orig_power = None
+    if power_preserving:
+        orig_power = np.mean(np.abs(ofdm_np[0, 0, 0, :, :]) ** 2)
+
     # 🎯 Weighted combination instead of pure additive
     # This preserves power better while keeping pattern detectable
     alpha = 0.7  # Original signal weight
@@ -344,6 +351,13 @@ def inject_covert_semi_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
             original = ofdm_np[0, 0, 0, s, sc]
             covert = complex(np.asarray(cs[k % cs.shape[0]]).item())
             ofdm_np[0, 0, 0, s, sc] = alpha * original + beta * covert
+    
+    # ✅ Explicit power normalization if enabled
+    if power_preserving and orig_power is not None and orig_power > 0:
+        current_power = np.mean(np.abs(ofdm_np[0, 0, 0, :, :]) ** 2)
+        if current_power > 0:
+            scale = np.sqrt(orig_power / current_power)
+            ofdm_np[0, 0, 0, :, :] *= scale
 
     # 🔍 DEBUG: Print injection details
     if not hasattr(inject_covert_semi_fixed, '_debug_count'):

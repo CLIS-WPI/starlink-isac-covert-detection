@@ -16,7 +16,7 @@ SEED = 42  # Random seed for reproducibility
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 500
+NUM_SAMPLES_PER_CLASS = 200
                                # With augmentation, effective samples = 6000 per class
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"

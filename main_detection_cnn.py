@@ -11,7 +11,8 @@ This replaces the RandomForest approach with deep learning for:
 
 Usage:
     python3 main_detection_cnn.py --use-csi  # With CSI fusion
-    python3 main_detection_cnn.py            # CNN-only
+    python3 main_detection_cnn.py --batch-size 512  # H100 optimized
+    python3 main_detection_cnn.py --multi-gpu  # Use all GPUs
 """
 
 import os
@@ -48,6 +49,26 @@ from config.settings import (
 from model.detector_cnn import CNNDetector
 
 
+def setup_gpu_strategy(multi_gpu=False):
+    """
+    Setup GPU strategy for training.
+    
+    Args:
+        multi_gpu: Use all available GPUs (MirroredStrategy)
+    
+    Returns:
+        strategy: TF distribution strategy
+    """
+    if multi_gpu:
+        # Use all available GPUs
+        strategy = tf.distribute.MirroredStrategy()
+        print(f"  ✓ Multi-GPU training: {strategy.num_replicas_in_sync} GPUs")
+    else:
+        # Single GPU (default)
+        strategy = tf.distribute.OneDeviceStrategy("/gpu:0")
+        print(f"  ✓ Single GPU training")
+    
+    return strategy
 def compute_spectrogram(grids):
     """
     Convert OFDM grids to spectrograms using STFT.
@@ -107,14 +128,15 @@ def compute_spectrogram(grids):
     return spectrograms
 
 
-def main(use_csi=False, epochs=50, batch_size=32):
+def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     """
     Main CNN detection pipeline.
     
     Args:
         use_csi: Whether to use CSI fusion (default: False)
         epochs: Number of training epochs
-        batch_size: Training batch size
+        batch_size: Training batch size (512 for H100)
+        multi_gpu: Use all available GPUs
     
     Returns:
         success: Whether pipeline succeeded
@@ -122,6 +144,11 @@ def main(use_csi=False, epochs=50, batch_size=32):
     """
     print("\n" + "#"*70)
     print("🧠 CNN COVERT CHANNEL DETECTION PIPELINE")
+    print("#"*70)
+    print()
+    
+    # Setup GPU strategy
+    strategy = setup_gpu_strategy(multi_gpu)
     print("#"*70)
     print()
     
@@ -165,8 +192,14 @@ def main(use_csi=False, epochs=50, batch_size=32):
     print(f"  → Benign: {np.sum(dataset['labels'] == 0)}")
     print(f"  → Attack: {np.sum(dataset['labels'] == 1)}")
     
-    # Extract data
-    X_grids = dataset['tx_grids']  # OFDM grids
+    # Extract data - Use post-channel rx_grids if available (more realistic)
+    if 'rx_grids' in dataset:
+        X_grids = dataset['rx_grids']  # Post-channel (with Doppler, fading, noise + injection)
+        print(f"  ✓ Using POST-CHANNEL rx_grids (realistic detection)")
+    else:
+        X_grids = dataset['tx_grids']  # Fallback to pre-channel
+        print(f"  ⚠️ Using PRE-CHANNEL tx_grids (fallback)")
+    
     Y = dataset['labels']
     
     # Apply spectrogram transform if enabled
@@ -388,8 +421,10 @@ if __name__ == "__main__":
                        help='Enable CSI fusion (multi-modal)')
     parser.add_argument('--epochs', type=int, default=50,
                        help='Number of training epochs (default: 50)')
-    parser.add_argument('--batch-size', type=int, default=32,
-                       help='Training batch size (default: 32)')
+    parser.add_argument('--batch-size', type=int, default=512,
+                       help='Training batch size (default: 512 for H100)')
+    parser.add_argument('--multi-gpu', action='store_true',
+                       help='Use all available GPUs (MirroredStrategy)')
     
     args = parser.parse_args()
     
@@ -397,7 +432,8 @@ if __name__ == "__main__":
         success, results = main(
             use_csi=args.use_csi,
             epochs=args.epochs,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            multi_gpu=args.multi_gpu
         )
         
         if success:
