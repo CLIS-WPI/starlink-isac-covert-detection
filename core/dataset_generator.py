@@ -526,15 +526,12 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             # ✅ Store post-channel rx grid ONLY for first satellite (to match tx_grids)
             # Use y_grid_noisy which has proper power and includes injection
             # Squeeze to remove batch/beam/UT dimensions: [1, 1, 1, 10, 64] -> [1, 10, 64]
-            # 🔧 Normalize to compensate for channel attenuation (preserve pattern, fix power)
             if sat_idx == 0:
                 rx_grid_squeezed = tf.squeeze(y_grid_noisy, axis=[1, 2])
-                # Normalize to unit power (like tx_grids)
-                rx_power = tf.reduce_mean(tf.abs(rx_grid_squeezed)**2)
-                # Cast sqrt result to complex to match rx_grid_squeezed dtype
-                scale_factor = tf.cast(tf.sqrt(tf.maximum(rx_power, 1e-10)), tf.complex64)
-                rx_grid_normalized = rx_grid_squeezed / scale_factor
-                rx_grid_np = rx_grid_normalized.numpy().astype(np.complex64)
+                # Simply store without per-sample normalization
+                # The CNN's preprocessing will handle magnitude normalization per-sample
+                # This preserves the power differences between benign/attack samples
+                rx_grid_np = rx_grid_squeezed.numpy().astype(np.complex64)
                 all_rx_grids.append(rx_grid_np)
             
             # compute delay (distance to emitter == attacked_sat_pos if attack else default user)
