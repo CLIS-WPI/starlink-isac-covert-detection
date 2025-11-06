@@ -254,10 +254,13 @@ class CNNDetector:
         # Stack as channels: (N, symbols, subcarriers, 2)
         X_processed = np.stack([magnitude, phase], axis=-1).astype(np.float32)
         
-        # Normalize magnitude to [0, 1] range
-        mag_max = np.max(X_processed[..., 0], axis=(1, 2), keepdims=True)
-        mag_max = np.where(mag_max > 0, mag_max, 1.0)  # Avoid division by zero
-        X_processed[..., 0] /= mag_max
+        # 🔧 GLOBAL normalization instead of per-sample
+        # This preserves relative differences between samples (critical for detection!)
+        # Old: mag_max per sample → destroyed pattern
+        # New: global max across ALL samples → preserves pattern
+        global_mag_max = np.max(X_processed[..., 0])
+        if global_mag_max > 0:
+            X_processed[..., 0] /= global_mag_max
         
         # Phase is already in [-π, π], normalize to [-1, 1]
         X_processed[..., 1] /= np.pi

@@ -161,34 +161,31 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
     n_subs = int((covert_rate_mbps * 1e6) / bps_per_sub)
     n_subs = max(1, min(n_subs, resource_grid.num_effective_subcarriers // 2))
 
-    # ✅ CONTROLLED RANDOMIZATION: Limited to MAX_SUBCARRIERS for pattern consistency
+    # ✅ FIXED BAND INJECTION: Always use subcarriers 0-15 for consistent pattern
     if RANDOMIZE_SUBCARRIERS:
         # Limit to first MAX_SUBCARRIERS (e.g., 48 out of 64) for consistent pattern region
         max_sc = min(MAX_SUBCARRIERS, resource_grid.num_effective_subcarriers)
         available_indices = np.arange(max_sc)
         selected_subcarriers = np.random.choice(available_indices, size=min(n_subs, len(available_indices)), replace=False)
     else:
-        # Original fixed behavior
-        np.random.seed(seed)
-        all_indices = np.arange(resource_grid.num_effective_subcarriers)
-        step = max(1, len(all_indices) // (n_subs * 5))
-        selected_subcarriers = all_indices[::step][:n_subs]
+        # 🎯 FIXED: Always use subcarriers 0-15 (or 0 to min(16, n_subs))
+        # This creates a consistent spectral pattern that CNN can learn
+        num_covert_subs = min(16, n_subs)  # Use first 16 subcarriers
+        selected_subcarriers = np.arange(num_covert_subs)
 
-    # ✅ CONTROLLED RANDOMIZATION: Fixed number of symbols for consistency
+    # ✅ FIXED SYMBOL PATTERN: Always use [1,3,5,7] for consistency
     if RANDOMIZE_SYMBOLS:
         # Always inject into NUM_INJECT_SYMBOLS (e.g., 7) symbols, but vary which ones
         num_to_inject = min(NUM_INJECT_SYMBOLS, num_ofdm_symbols)
         selected_symbols = np.random.choice(num_ofdm_symbols, size=num_to_inject, replace=False).tolist()
     else:
-        # Original fixed behavior
-        if num_ofdm_symbols >= 10:
-            selected_symbols = list(range(1, min(num_ofdm_symbols-1, 8)))
-        elif num_ofdm_symbols >= 7:
-            selected_symbols = [1,2,3,4]
-        elif num_ofdm_symbols >= 3:
-            selected_symbols = [1,2]
-        else:
-            selected_symbols = [0]
+        # 🎯 FIXED: Always use symbols [1, 3, 5, 7] (odd symbols pattern)
+        # This creates a consistent temporal pattern that CNN can learn
+        fixed_pattern = [1, 3, 5, 7]
+        selected_symbols = [s for s in fixed_pattern if s < num_ofdm_symbols]
+        # If not enough symbols, fallback to simple pattern
+        if len(selected_symbols) < 2:
+            selected_symbols = list(range(min(2, num_ofdm_symbols)))
 
     # Generate covert data (data random, positions fixed)
     covert_bits = tf.random.uniform(

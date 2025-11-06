@@ -7,7 +7,7 @@ import numpy as np
 
 # Load dataset
 print("Loading dataset...")
-d = pickle.load(open('dataset/dataset_samples200_sats12.pkl', 'rb'))
+d = pickle.load(open('dataset/dataset_samples500_sats12.pkl', 'rb'))
 rx_grids = d['rx_grids']
 labels = d['labels']
 

@@ -723,6 +723,13 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                         scale_factor = np.sqrt(target_power / current_power)
                         all_iq[i] = all_iq[i] * scale_factor
                         
+                        # ✅ CRITICAL FIX: Also scale rx_grids and tx_grids!
+                        # This ensures spectral pattern is preserved after power normalization
+                        if i < len(all_rx_grids):
+                            all_rx_grids[i] = all_rx_grids[i] * scale_factor
+                        if i < len(all_tx_grids):
+                            all_tx_grids[i] = all_tx_grids[i] * scale_factor
+                        
                         for sat_rx in all_sat_recepts[i]:
                             sat_rx['rx_time'] = sat_rx['rx_time'] * scale_factor
                             sat_rx['rx_freq'] = sat_rx['rx_freq'] * scale_factor

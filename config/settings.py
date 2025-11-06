@@ -16,8 +16,9 @@ SEED = 42  # Random seed for reproducibility
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 200
-                               # With augmentation, effective samples = 6000 per class
+NUM_SAMPLES_PER_CLASS = 500  # 🔧 افزایش از 200 به 500 (total: 1000 samples)
+                              # CNN needs more data to learn the pattern
+                              # With 400 samples, training was unstable
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"
 MODEL_DIR = "model"
@@ -35,13 +36,14 @@ ABLATION_CONFIG = {
 # =======================================================
 
 # Covert channel injection parameters
-COVERT_AMP = 0.2  # 🎯 کاهش شدید - برای power preservation واقعی
-                   # با این مقدار: power diff < 2% و pattern هنوز detectable
-                   # بعد از AUC > 0.85 می‌توان به 0.1 کاهش داد
+COVERT_AMP = 0.5  # 🔧 افزایش از 0.3 به 0.5 برای الگوی بسیار قوی
+                   # با 0.3 pattern visible بود ولی learnable نبود (AUC=0.47)
+                   # با 0.5 pattern خیلی قوی‌تر می‌شه، variance کمتر می‌شه
+                   # Trade-off: power diff بیشتر می‌شه (~10-15%) ولی detectable می‌شه
 
-# 🎯 SEMI-FIXED PATTERN STRATEGY (for better CNN learning)
-# Instead of fully random, use controlled patterns that CNN can learn
-USE_SEMI_FIXED_PATTERN = True  # Enable semi-fixed injection pattern
+# 🎯 FIXED PATTERN STRATEGY (for consistent CNN learning)
+# Use FIXED band position instead of semi-fixed for better detectability
+USE_SEMI_FIXED_PATTERN = False  # ❌ غیرفعال - استفاده از fixed pattern به جای semi-fixed
 
 # 🔬 ADVANCED FEATURES (Multi-modal Learning)
 CSI_FUSION = True
@@ -68,10 +70,12 @@ SYMBOL_PATTERN_OPTIONS = [
 SYMBOL_PATTERNS = SYMBOL_PATTERN_OPTIONS
 SUBBAND_SIZE = BAND_SIZE  # Alias for documentation consistency
 
-# ⚠️ CRITICAL: Disable randomization when using semi-fixed pattern!
-# Legacy randomization (ONLY used if USE_SEMI_FIXED_PATTERN = False)
-RANDOMIZE_SUBCARRIERS = False  # ❌ غیرفعال - must be False for semi-fixed pattern to work
-RANDOMIZE_SYMBOLS = False      # ❌ غیرفعال - must be False for semi-fixed pattern to work
+# ⚠️ CRITICAL: Disable randomization for FIXED pattern!
+# Legacy randomization settings (ONLY used if USE_SEMI_FIXED_PATTERN = False)
+RANDOMIZE_SUBCARRIERS = False  # ❌ غیرفعال - use fixed band_start=0
+RANDOMIZE_SYMBOLS = False      # ❌ غیرفعال - use fixed symbol pattern
+RANDOMIZE_BAND_START = False   # ❌ غیرفعال - همیشه band_start=0
+RANDOMIZE_SYMBOL_PATTERN = False  # ❌ غیرفعال - همیشه pattern [1,3,5,7]
 MAX_SUBCARRIERS = 48          # 🎯 Limit randomization to first 48 (not all 64) for pattern consistency
 MAX_SYMBOLS = 10              # 🎯 Total OFDM symbols available
 NUM_INJECT_SYMBOLS = 7        # 🎯 How many symbols to inject covert signal into
