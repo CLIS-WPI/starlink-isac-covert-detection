@@ -105,8 +105,10 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     all_iq, all_rxfreq, all_radar, all_labels, all_emit = [], [], [], [], []
     all_sat_recepts = []
     all_tx_time_padded = []
-    all_tx_grids = []  # ✅ Pre-channel OFDM grids (clean pattern)
+    all_tx_grids = []  # ✅ Pre-channel OFDM grids (after injection)
     all_rx_grids = []  # ✅ Post-channel OFDM grids (with effects)
+    all_csi_est = []   # ✅ Estimated CSI (LS)
+    all_meta = []      # ✅ Meta per-sample
 
     # Try to use constellation selector / leo_orbit if available
     USE_SGP4 = False
@@ -340,29 +342,38 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         x = tf.reshape(x, [1, isac_system.NUM_SAT_BEAMS, isac_system.NUM_UT, -1])
         tx_grid_clean = isac_system.rg_mapper(x)  # CLEAN waveform baseline
 
-        # attacked waveform: copy + injection (if attack)
-        tx_grid_attacked = tx_grid_clean
-        if is_attack:
-            # increase covert throughput for stronger spectral footprint
-            covert_rate = 80.0  # 80 Mbps - افزایش throughput برای اثر طیفی قوی‌تر
-            
-            # 🐛 DEBUG: Print before injection
-            if idx < 3:  # Print first 3 attack samples
-                print(f"[Dataset] Sample {idx} (ATTACK): Will inject AFTER channel (rate={covert_rate:.2f}, amp={COVERT_AMP})")
-            
-            # ❌ REMOVED: Injection moved to AFTER channel simulation
-            # Reason: Doppler and channel effects would destroy pre-channel injection
-            
-            tx_grid_attacked = tx_grid_clean  # Use clean grid for channel
-            emitter_location = None  # Will be set after channel if attack
-        else:
-            # 🐛 DEBUG: Print benign samples too
-            if idx < 3:
-                print(f"[Dataset] Sample {idx} (BENIGN): No injection")
+        # ✅ Inject BEFORE channel (scenario-driven)
+        from config.settings import INSIDER_MODE, POWER_PRESERVING_COVERT
+        tx_grid_injected = tx_grid_clean
         
-        # ✅ Store OFDM grid for frequency-domain detection (ensure complex64 for memory efficiency)
-        g = tx_grid_attacked.numpy().astype(np.complex64)
-        all_tx_grids.append(g)
+        # 🔍 Calculate power BEFORE injection (for meta)
+        power_before = float(np.mean(np.abs(tx_grid_clean.numpy())**2))
+        power_after = power_before
+        power_diff_pct = 0.0
+        
+        if is_attack:
+            try:
+                out = inject_covert_channel_fixed(
+                    tf.identity(tx_grid_clean),
+                    isac_system.rg,
+                    80.0,
+                    isac_system.SUBCARRIER_SPACING,
+                    covert_amp=COVERT_AMP,
+                    seed=42,
+                    injection_point='sat_downlink' if INSIDER_MODE=='sat' else 'ground_uplink',
+                    power_preserving=POWER_PRESERVING_COVERT
+                )
+                tx_grid_injected = out[0]
+                
+                # 🔍 Calculate power AFTER injection (for meta)
+                power_after = float(np.mean(np.abs(tx_grid_injected.numpy())**2))
+                power_diff_pct = (abs(power_after - power_before) / (power_before + 1e-12)) * 100.0
+            except Exception as e:
+                print(f"[Dataset][WARN] Pre-channel injection failed: {e}")
+
+        # ✅ Store OFDM grid after injection (pre-channel)
+        g = tx_grid_injected.numpy().astype(np.complex64)
+        all_tx_grids.append((i, g))  # 🔧 FIX: Store with index for proper alignment after sort
 
         # -------------- compute tx_time and padded base (use clean base as canonical tx_time) --------------
         tx_time = isac_system.modulator(tx_grid_clean)
@@ -386,14 +397,9 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         sat_rx_list = []
         for sat_idx, (sat_pos, sat_vel) in enumerate(zip(base_positions[:num_satellites], base_velocities[:num_satellites])):
 
-            # select which tx_grid this satellite "sees"
-            if is_attack and (sat_idx == attacked_sat_index):
-                tx_grid_used = tx_grid_attacked
-                # For Path-B attacked copy option, we will derive time waveform from attacked tx_grid
-                tx_time_for_sat = isac_system.modulator(tx_grid_attacked)
-            else:
-                tx_grid_used = tx_grid_clean
-                tx_time_for_sat = tx_time  # canonical clean time waveform
+            # select which tx_grid this satellite "sees" (use injected for attack else clean)
+            tx_grid_used = tx_grid_injected if is_attack else tx_grid_clean
+            tx_time_for_sat = isac_system.modulator(tx_grid_used)
 
             # generate channel with topology if available (same as your original)
             if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
@@ -448,7 +454,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             h_f = tf.expand_dims(h_f, axis=1)
             h_f = tf.expand_dims(h_f, axis=2)
 
-            # Path A: apply channel + AWGN using tx_grid_used (for detection)
+            # Path A: apply channel using tx_grid_used (pre-channel injected)
             y_grid_channel = tx_grid_used * h_f
             ebno_db = float(tf.random.uniform((), *ebno_db_range))
             
@@ -477,50 +483,28 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                 print(f"[Dataset][WARN] Sample {idx}, Sat {sat_idx}: Invalid noise std, skipping...")
                 continue
             
-            n_f = tf.complex(
-                tf.random.normal(tf.shape(y_grid_channel), stddev=std_freq),
-                tf.random.normal(tf.shape(y_grid_channel), stddev=std_freq)
+            # Apply Doppler in time-domain, then add AWGN and demodulate
+            y_time = isac_system.modulator(y_grid_channel)
+            try:
+                c0_local = 3e8
+                em_pos = attacked_sat_pos if is_attack else np.array([50e3, 50e3, 0.0])
+                los = np.array(sat_pos) - np.array(em_pos)
+                los_hat = los / (np.linalg.norm(los) + 1e-12)
+                v_rel = np.dot(np.array(sat_vel), los_hat)
+                f_d = (v_rel / c0_local) * isac_system.CARRIER_FREQUENCY
+            except Exception:
+                f_d = 0.0
+            y_time_dopp = isac_system.apply_doppler_time(y_time, float(f_d))
+            rx_pow_td = tf.reduce_mean(tf.abs(y_time_dopp)**2)
+            rx_pow_td = tf.maximum(rx_pow_td, 1e-20)
+            sigma2_td = rx_pow_td / esn0
+            std_td = tf.sqrt(tf.cast(tf.maximum(sigma2_td / 2.0, 1e-30), tf.float32))
+            n_td = tf.complex(
+                tf.random.normal(tf.shape(y_time_dopp), stddev=std_td),
+                tf.random.normal(tf.shape(y_time_dopp), stddev=std_td)
             )
-            y_grid_noisy = y_grid_channel + n_f
-            
-            # 🎯 POST-CHANNEL INJECTION (if attack)
-            if is_attack:
-                # Inject covert pattern AFTER channel effects
-                from config.settings import USE_SEMI_FIXED_PATTERN
-                covert_rate = 80.0
-                
-                try:
-                    if USE_SEMI_FIXED_PATTERN:
-                        out = inject_covert_semi_fixed(
-                            tf.identity(y_grid_noisy),
-                            isac_system.rg,
-                            covert_rate,
-                            isac_system.SUBCARRIER_SPACING,
-                            covert_amp=COVERT_AMP
-                        )
-                    else:
-                        out = inject_covert_channel_fixed(
-                            tf.identity(y_grid_noisy),
-                            isac_system.rg,
-                            covert_rate,
-                            isac_system.SUBCARRIER_SPACING,
-                            covert_amp=COVERT_AMP,
-                            seed=42
-                        )
-                    
-                    if isinstance(out, tuple) or isinstance(out, list):
-                        y_grid_noisy = out[0]
-                        emitter_location = out[1] if len(out) > 1 else None
-                    else:
-                        y_grid_noisy = out
-                    
-                    if idx < 3:
-                        print(f"[Dataset] Sample {idx}: POST-CHANNEL injection done!")
-                        
-                except Exception as e:
-                    print(f"[Dataset][WARN] Post-channel injection failed: {e}")
-            
-            y_time_noisy = isac_system.modulator(y_grid_noisy)
+            y_time_noisy = y_time_dopp + n_td
+            y_grid_noisy = isac_system.demodulator(y_time_noisy)
             y_time_noisy_flat = tf.squeeze(y_time_noisy)
             
             # ✅ Store post-channel rx grid ONLY for first satellite (to match tx_grids)
@@ -528,11 +512,13 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             # Squeeze to remove batch/beam/UT dimensions: [1, 1, 1, 10, 64] -> [1, 10, 64]
             if sat_idx == 0:
                 rx_grid_squeezed = tf.squeeze(y_grid_noisy, axis=[1, 2])
-                # Simply store without per-sample normalization
-                # The CNN's preprocessing will handle magnitude normalization per-sample
-                # This preserves the power differences between benign/attack samples
                 rx_grid_np = rx_grid_squeezed.numpy().astype(np.complex64)
-                all_rx_grids.append(rx_grid_np)
+                all_rx_grids.append((i, rx_grid_np))  # 🔧 FIX: Store with index for proper alignment
+                # CSI LS estimate over all tones
+                tx_squeezed = tf.squeeze(tx_grid_used, axis=[1, 2])
+                denom = tf.where(tf.abs(tx_squeezed) > 1e-9, tx_squeezed, tf.complex(tf.ones_like(tx_squeezed, tf.float32)*1e-9, tf.zeros_like(tx_squeezed, tf.float32)))
+                h_est = rx_grid_squeezed / denom
+                all_csi_est.append((i, h_est.numpy().astype(np.complex64)))  # 🔧 FIX: Store with index
             
             # compute delay (distance to emitter == attacked_sat_pos if attack else default user)
             if is_attack:
@@ -650,6 +636,33 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             all_emit.append((i, None))
 
         all_labels.append((i, y))
+        
+        # Meta log: extract doppler from first satellite (sat_idx=0)
+        sample_f_d = 0.0
+        if len(sat_rx_list) > 0:
+            # Try to get doppler from first satellite's reception
+            # We computed f_d inside the loop, but need to capture it
+            # For now, compute it again from first satellite
+            try:
+                em_pos = attacked_sat_pos if is_attack else np.array([50e3, 50e3, 0.0])
+                sat_pos_0 = base_positions[0]
+                sat_vel_0 = base_velocities[0]
+                los = np.array(sat_pos_0) - np.array(em_pos)
+                los_hat = los / (np.linalg.norm(los) + 1e-12)
+                v_rel = np.dot(np.array(sat_vel_0), los_hat)
+                c0_local = 3e8
+                sample_f_d = (v_rel / c0_local) * isac_system.CARRIER_FREQUENCY
+            except Exception:
+                sample_f_d = 0.0
+        
+        all_meta.append((i, {
+            'doppler_hz': float(sample_f_d),
+            'insider_mode': INSIDER_MODE if is_attack else 'benign',
+            'power_preserving': bool(POWER_PRESERVING_COVERT),
+            'power_before': float(power_before),
+            'power_after': float(power_after),
+            'power_diff_pct': float(power_diff_pct)
+        }))
 
         if (idx + 1) % 100 == 0:
             print(f"  Generated {idx+1}/{total} samples")
@@ -670,6 +683,10 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     all_labels = [x[1] for x in sorted(all_labels, key=lambda z: z[0])]
     all_emit = [x[1] for x in sorted(all_emit, key=lambda z: z[0])]
     all_sat_recepts = [x[1] for x in sorted(all_sat_recepts, key=lambda z: z[0])]
+    all_tx_grids = [x[1] for x in sorted(all_tx_grids, key=lambda z: z[0])]  # 🔧 FIX: Sort tx_grids by index
+    all_rx_grids = [x[1] for x in sorted(all_rx_grids, key=lambda z: z[0])]  # 🔧 FIX: Sort rx_grids by index
+    all_csi_est = [x[1] for x in sorted(all_csi_est, key=lambda z: z[0])]  # 🔧 FIX: Sort csi_est by index
+    all_meta = [x[1] for x in sorted(all_meta, key=lambda z: z[0])]
 
     print(f"✓ Dataset generation complete: {len(all_labels)} samples")
     
@@ -780,6 +797,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     return {
         'iq_samples': np.array(all_iq),
         'csi': np.array(all_rxfreq),
+        'csi_est': np.array(all_csi_est) if len(all_csi_est)>0 else None,
         'radar_echo': np.array(all_radar),
         'labels': np.array(all_labels),
         'emitter_locations': all_emit,
@@ -787,6 +805,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         'sampling_rate': isac_system.SAMPLING_RATE,
         'tx_time_padded': tx_time_padded_arr,
         'rx_time_b_full': rx_time_b_full_arr,
-        'tx_grids': np.array(all_tx_grids),  # ✅ Pre-channel OFDM grids (clean pattern)
-        'rx_grids': np.array(all_rx_grids)   # ✅ Post-channel OFDM grids (realistic)
+        'tx_grids': np.array(all_tx_grids),  # ✅ Pre-channel OFDM grids (after injection)
+        'rx_grids': np.array(all_rx_grids),  # ✅ Post-channel OFDM grids (realistic)
+        'meta': all_meta
     }

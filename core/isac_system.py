@@ -97,6 +97,25 @@ class ISACSystem:
         
         # Topology cache
         self.topology_cache = []
+    def apply_doppler_time(self, x_time, doppler_hz):
+        """Apply Doppler shift to complex time-domain waveform.
+
+        Args:
+            x_time: tf.Tensor complex, shape [..., N]
+            doppler_hz: float scalar Doppler frequency (Hz)
+
+        Returns:
+            tf.Tensor with same shape, Doppler-applied.
+        """
+        try:
+            n = tf.shape(x_time)[-1]
+            # Time vector based on sampling rate
+            t = tf.range(n, dtype=tf.float32) / tf.constant(self.SAMPLING_RATE, dtype=tf.float32)
+            phase = 2.0 * np.pi * tf.cast(doppler_hz, tf.float32) * t
+            rot = tf.complex(tf.math.cos(phase), tf.math.sin(phase))
+            return x_time * rot
+        except Exception:
+            return x_time
         
         # ✅ NEW: STNN models for fast localization
         self.stnn_estimator = None

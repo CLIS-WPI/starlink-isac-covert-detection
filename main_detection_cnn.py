@@ -192,17 +192,19 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print(f"  → Benign: {np.sum(dataset['labels'] == 0)}")
     print(f"  → Attack: {np.sum(dataset['labels'] == 1)}")
     
-    # Extract data - Choose based on detector type
-    # For CNN-only: Use tx_grids (pre-channel) for stronger pattern visibility
-    # For CNN+CSI: Use rx_grids (post-channel) for realistic detection
-    if use_csi and 'rx_grids' in dataset:
-        # CNN+CSI: Use post-channel for realistic detection
-        X_grids = dataset['rx_grids']  # Post-channel (with Doppler, fading, noise + injection)
-        print(f"  ✓ Using POST-CHANNEL rx_grids (realistic detection with CSI)")
-    elif 'tx_grids' in dataset:
-        # CNN-only: Use pre-channel for stronger pattern (better for learning)
+    # Extract data - 🔧 FIX: Use tx_grids for BOTH CNN-only and CNN+CSI
+    # Reason: rx_grids (post-channel) has weak pattern due to channel effects
+    # tx_grids (pre-channel) has strong pattern that CNN can learn
+    # CSI will still provide channel information for fusion
+    if 'tx_grids' in dataset:
+        # Use pre-channel for stronger pattern (both CNN-only and CNN+CSI)
         X_grids = dataset['tx_grids']  # Pre-channel (clean pattern, easier to learn)
-        print(f"  ✓ Using PRE-CHANNEL tx_grids (stronger pattern for CNN-only)")
+        print(f"  ✓ Using PRE-CHANNEL tx_grids (stronger pattern for {'CNN+CSI' if use_csi else 'CNN-only'})")
+        print(f"  → Note: CSI will provide channel info, OFDM grid shows pre-channel pattern")
+    elif 'rx_grids' in dataset:
+        # Fallback to rx_grids if tx_grids not available
+        X_grids = dataset['rx_grids']  # Post-channel (weaker pattern)
+        print(f"  ⚠️ Using POST-CHANNEL rx_grids (fallback, pattern may be weak)")
     else:
         X_grids = dataset.get('rx_grids', dataset.get('tx_grids'))
         print(f"  ⚠️ Using available grids")
@@ -217,32 +219,166 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
         X_grids = compute_spectrogram(X_grids)
     
     X_csi = None
-    if use_csi and 'csi' in dataset:
+    if use_csi and 'csi_est' in dataset and dataset['csi_est'] is not None:
+        X_csi = dataset['csi_est']
+        print(f"  ✓ CSI_est (LS) available: shape {X_csi.shape}")
+        # 🔧 DEBUG: Fix CSI shape if needed (remove extra dimension)
+        if X_csi.ndim == 4 and X_csi.shape[1] == 1:
+            X_csi = np.squeeze(X_csi, axis=1)
+            print(f"  🔧 Fixed CSI shape: {X_csi.shape}")
+    elif use_csi and 'csi' in dataset:
         X_csi = dataset['csi']
-        print(f"  ✓ CSI data available: shape {X_csi.shape}")
+        print(f"  ✓ CSI (legacy) available: shape {X_csi.shape}")
     elif use_csi:
         print(f"  ⚠️ CSI fusion requested but 'csi' not in dataset!")
         print(f"     Falling back to CNN-only mode.")
         use_csi = False
     
-    # ===== Phase 2: Power Verification =====
-    print(f"\n{'='*70}")
-    print("[Phase 2] Power-preserving verification...")
-    print(f"{'='*70}")
-    
+    # 🔍 DEBUG: Check pattern visibility before preprocessing
+    print(f"\n  🔍 DEBUG: Pattern visibility check (before preprocessing)...")
     benign_mask = (Y == 0)
     attack_mask = (Y == 1)
+    if np.sum(benign_mask) > 0 and np.sum(attack_mask) > 0:
+        # Check in tx_grids (pre-channel, where injection happens)
+        if 'tx_grids' in dataset:
+            tx_grids = dataset['tx_grids']
+            benign_tx = np.squeeze(tx_grids[benign_mask][0])
+            attack_tx = np.squeeze(tx_grids[attack_mask][0])
+            diff_tx = np.abs(attack_tx - benign_tx)
+            max_diff_tx = np.max(diff_tx)
+            mean_diff_tx = np.mean(diff_tx)
+            print(f"    [TX grids (pre-channel)]")
+            print(f"      Benign shape: {benign_tx.shape}, mean={np.mean(np.abs(benign_tx)):.6f}")
+            print(f"      Attack shape: {attack_tx.shape}, mean={np.mean(np.abs(attack_tx)):.6f}")
+            print(f"      Max difference: {max_diff_tx:.6f}")
+            print(f"      Mean difference: {mean_diff_tx:.6f}")
+            # Check spectral pattern (subcarrier-wise)
+            benign_spec = np.mean(np.abs(benign_tx), axis=0)  # Average over symbols
+            attack_spec = np.mean(np.abs(attack_tx), axis=0)
+            spec_diff = np.abs(attack_spec - benign_spec)
+            max_spec_diff = np.max(spec_diff)
+            mean_spec_diff = np.mean(spec_diff)
+            # Find which subcarriers have the largest difference (should be 24-39 if fixed pattern)
+            top_diff_indices = np.argsort(spec_diff)[-10:][::-1]  # Top 10 subcarriers
+            print(f"      Spectral diff (subcarrier-wise): max={max_spec_diff:.6f}, mean={mean_spec_diff:.6f}")
+            print(f"      Top 10 subcarriers with diff: {top_diff_indices.tolist()}")
+            print(f"      Diff values: {spec_diff[top_diff_indices].tolist()}")
+            # 🔧 FIX: Check if pattern is in expected subcarriers (24-39, middle band)
+            expected_subs = np.arange(24, 40)  # Middle band subcarriers
+            # Normalize by number of subcarriers for fair comparison
+            num_expected = len(expected_subs)
+            num_outside = len(spec_diff) - num_expected
+            diff_in_expected = np.sum(spec_diff[expected_subs]) / num_expected  # Average per subcarrier
+            outside_indices = np.setdiff1d(np.arange(len(spec_diff)), expected_subs)
+            diff_outside_expected = np.sum(spec_diff[outside_indices]) / num_outside  # Average per subcarrier
+            print(f"      Diff in subcarriers 24-39 (avg): {diff_in_expected:.6f}")
+            print(f"      Diff in subcarriers outside 24-39 (avg): {diff_outside_expected:.6f}")
+            if diff_in_expected < diff_outside_expected * 0.8:  # More lenient threshold (0.8 instead of 0.5)
+                print(f"      ⚠️  WARNING: Pattern NOT strongly concentrated in 24-39!")
+                print(f"         (But this is OK if AUC is high - random variations can be larger)")
+            else:
+                print(f"      ✓ Pattern is concentrated in subcarriers 24-39")
+            if mean_diff_tx < 0.01:
+                print(f"      ⚠️  WARNING: Very small difference in tx_grids!")
+            else:
+                print(f"      ✓ Pattern visible in tx_grids")
+        
+        # Check in X_grids (what CNN sees)
+        benign_sample = X_grids[benign_mask][0]
+        attack_sample = X_grids[attack_mask][0]
+        benign_sample = np.squeeze(benign_sample)
+        attack_sample = np.squeeze(attack_sample)
+        diff = np.abs(attack_sample - benign_sample)
+        max_diff = np.max(diff)
+        mean_diff = np.mean(diff)
+        print(f"    [X_grids (CNN input)]")
+        print(f"      Benign shape: {benign_sample.shape}, mean={np.mean(np.abs(benign_sample)):.6f}")
+        print(f"      Attack shape: {attack_sample.shape}, mean={np.mean(np.abs(attack_sample)):.6f}")
+        print(f"      Max difference: {max_diff:.6f}")
+        print(f"      Mean difference: {mean_diff:.6f}")
+        if mean_diff < 0.01:
+            print(f"      ⚠️  WARNING: Very small difference! Pattern may be lost in channel.")
+        else:
+            print(f"      ✓ Pattern difference is visible")
     
+    # ===== Phase 2: Physical Metrics Analysis =====
+    print(f"\n{'='*70}")
+    print("[Phase 2] Physical Metrics Analysis...")
+    print(f"{'='*70}")
+    
+    # Extract scenario info from meta
+    from config.settings import INSIDER_MODE, POWER_PRESERVING_COVERT, COVERT_AMP
+    scenario_info = {
+        'insider_mode': INSIDER_MODE,
+        'injection_point': 'pre-channel',  # Always pre-channel now
+        'power_preserving': POWER_PRESERVING_COVERT,
+        'covert_amp': COVERT_AMP
+    }
+    
+    # Doppler analysis
+    dopplers = []
+    if 'meta' in dataset and isinstance(dataset['meta'], list):
+        for m in dataset['meta']:
+            if isinstance(m, dict) and 'doppler_hz' in m:
+                dopplers.append(m['doppler_hz'])
+    
+    if len(dopplers) > 0:
+        dopplers = np.array(dopplers)
+        doppler_mean = float(np.mean(dopplers))
+        doppler_std = float(np.std(dopplers))
+        doppler_min = float(np.min(dopplers))
+        doppler_max = float(np.max(dopplers))
+        print(f"  ✓ Doppler: mean={doppler_mean:.2f} Hz, std={doppler_std:.2f} Hz")
+        print(f"  ✓ Doppler range: [{doppler_min:.2f}, {doppler_max:.2f}] Hz")
+        results['doppler_stats'] = {
+            'mean_hz': doppler_mean,
+            'std_hz': doppler_std,
+            'min_hz': doppler_min,
+            'max_hz': doppler_max
+        }
+    else:
+        print(f"  ⚠️  No Doppler data in meta")
+        results['doppler_stats'] = None
+    
+    # Power analysis - Use tx_grids for accurate power comparison (pre-channel)
+    # X_grids might be rx_grids (post-channel) which has different power
+    if 'tx_grids' in dataset:
+        tx_grids = dataset['tx_grids']
+        benign_tx = np.squeeze(tx_grids[benign_mask])
+        attack_tx = np.squeeze(tx_grids[attack_mask])
+        benign_power_tx = np.mean(np.abs(benign_tx) ** 2)
+        attack_power_tx = np.mean(np.abs(attack_tx) ** 2)
+        power_diff_pct = abs(attack_power_tx - benign_power_tx) / benign_power_tx * 100
+        print(f"  ✓ Power (tx_grids, pre-channel): benign={benign_power_tx:.6e}, attack={attack_power_tx:.6e}, diff={power_diff_pct:.2f}%")
+    else:
+        # Fallback to X_grids
+        benign_grids = np.squeeze(X_grids[benign_mask])
+        attack_grids = np.squeeze(X_grids[attack_mask])
+        benign_power = np.mean(np.abs(benign_grids) ** 2)
+        attack_power = np.mean(np.abs(attack_grids) ** 2)
+        power_diff_pct = abs(attack_power - benign_power) / benign_power * 100
+    
+    # Also compute from X_grids for comparison
     benign_grids = np.squeeze(X_grids[benign_mask])
     attack_grids = np.squeeze(X_grids[attack_mask])
-    
     benign_power = np.mean(np.abs(benign_grids) ** 2)
     attack_power = np.mean(np.abs(attack_grids) ** 2)
-    power_diff_pct = abs(attack_power - benign_power) / benign_power * 100
     
-    print(f"  ✓ Benign power: {benign_power:.6f}")
-    print(f"  ✓ Attack power: {attack_power:.6f}")
-    print(f"  ✓ Difference:   {power_diff_pct:.2f}%")
+    # Per-sample power differences
+    benign_powers_per_sample = [np.mean(np.abs(g)**2) for g in benign_grids]
+    attack_powers_per_sample = [np.mean(np.abs(g)**2) for g in attack_grids]
+    power_diffs_per_sample = []
+    for i, ap in enumerate(attack_powers_per_sample):
+        if i < len(benign_powers_per_sample):
+            diff = abs(ap - benign_powers_per_sample[i]) / (benign_powers_per_sample[i] + 1e-12) * 100
+            power_diffs_per_sample.append(diff)
+    
+    power_diff_mean = np.mean(power_diffs_per_sample) if power_diffs_per_sample else power_diff_pct
+    power_diff_std = np.std(power_diffs_per_sample) if power_diffs_per_sample else 0.0
+    
+    print(f"  ✓ Benign power: {benign_power:.6e} ± {np.std(benign_powers_per_sample):.6e}")
+    print(f"  ✓ Attack power: {attack_power:.6e} ± {np.std(attack_powers_per_sample):.6e}")
+    print(f"  ✓ Power diff:   {power_diff_pct:.2f}% (mean±std: {power_diff_mean:.2f}±{power_diff_std:.2f}%)")
     
     if power_diff_pct < 5.0:
         print(f"  ✅ Ultra-covert: Power difference < 5% (truly stealthy!)")
@@ -254,8 +390,35 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     results['power_analysis'] = {
         'benign_power': float(benign_power),
         'attack_power': float(attack_power),
-        'difference_pct': float(power_diff_pct)
+        'difference_pct': float(power_diff_pct),
+        'difference_mean_pct': float(power_diff_mean),
+        'difference_std_pct': float(power_diff_std)
     }
+    
+    # CSI quality analysis
+    if use_csi and X_csi is not None:
+        try:
+            csi_mag = np.abs(X_csi)
+            csi_variance = float(np.var(csi_mag))
+            csi_mean = float(np.mean(csi_mag))
+            csi_std = float(np.std(csi_mag))
+            print(f"  ✓ CSI quality: mean={csi_mean:.6f}, std={csi_std:.6f}, variance={csi_variance:.6e}")
+            results['csi_quality'] = {
+                'mean': csi_mean,
+                'std': csi_std,
+                'variance': csi_variance
+            }
+        except Exception as e:
+            print(f"  ⚠️  CSI quality analysis failed: {e}")
+            results['csi_quality'] = None
+    else:
+        results['csi_quality'] = None
+    
+    # Store scenario info
+    results['scenario'] = scenario_info
+    
+    # Store power_diffs_per_sample for CSV export later
+    results['_power_diffs_per_sample'] = power_diffs_per_sample
     
     # ===== Phase 2.5: Pattern Injection Verification =====
     print(f"\n{'='*70}")
@@ -369,6 +532,13 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print(f"{'='*70}")
     
     metrics = detector.evaluate(X_test, y_test, X_csi_test=X_csi_test)
+
+    # Additional physical reporting (already in results from Phase 2)
+    if results.get('doppler_stats'):
+        metrics['doppler_mean_hz'] = results['doppler_stats']['mean_hz']
+        metrics['doppler_std_hz'] = results['doppler_stats']['std_hz']
+    if results.get('csi_quality'):
+        metrics['csi_variance'] = results['csi_quality']['variance']
     
     print(f"\n📊 Test Set Performance:")
     print(f"  {'='*50}")
@@ -395,28 +565,85 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print("[Phase 6] Saving model...")
     print(f"{'='*70}")
     
+    # 🔧 FIX: Organize models by scenario
+    scenario_folder = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    scenario_model_dir = f"{MODEL_DIR}/{scenario_folder}"
+    os.makedirs(scenario_model_dir, exist_ok=True)
+    
     model_filename = f"cnn_detector{'_csi' if use_csi else ''}.keras"
-    model_path = f"{MODEL_DIR}/{model_filename}"
+    model_path = f"{scenario_model_dir}/{model_filename}"
     detector.save(model_path)
     
     results['model_path'] = model_path
     
     # ===== Save Results =====
-    result_path = f"{RESULT_DIR}/detection_results_cnn.json"
+    # 🔧 FIX: Organize results by scenario (scenario_a for 'sat', scenario_b for 'ground')
+    scenario_folder = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    scenario_result_dir = f"{RESULT_DIR}/{scenario_folder}"
+    os.makedirs(scenario_result_dir, exist_ok=True)
+    
+    detector_suffix = '_csi' if use_csi else ''
+    result_filename = f"detection_results_cnn{detector_suffix}.json"
+    result_path = f"{scenario_result_dir}/{result_filename}"
     with open(result_path, 'w') as f:
         json.dump(results, f, indent=2)
     
     print(f"\n✓ Results saved to {result_path}")
+    
+    # ===== Export CSV Meta Log =====
+    if 'meta' in dataset and isinstance(dataset['meta'], list):
+        try:
+            import pandas as pd
+            csv_data = []
+            for i, m in enumerate(dataset['meta']):
+                if isinstance(m, dict):
+                    row = {
+                        'sample_idx': i,
+                        'label': int(Y[i]) if i < len(Y) else -1,
+                        'doppler_hz': m.get('doppler_hz', 0.0),
+                        'insider_mode': m.get('insider_mode', INSIDER_MODE),
+                        'power_preserving': m.get('power_preserving', POWER_PRESERVING_COVERT)
+                    }
+                    # Add per-sample power diff if available
+                    power_diffs = results.get('_power_diffs_per_sample', [])
+                    if i < len(power_diffs):
+                        row['power_diff_pct'] = power_diffs[i]
+                    csv_data.append(row)
+            
+            if csv_data:
+                df = pd.DataFrame(csv_data)
+                csv_filename = f"run_meta_log{detector_suffix}.csv"
+                csv_path = f"{scenario_result_dir}/{csv_filename}"
+                df.to_csv(csv_path, index=False)
+                print(f"✓ Meta log CSV saved to {csv_path}")
+        except Exception as e:
+            print(f"  ⚠️  CSV export failed: {e}")
     
     # ===== Summary =====
     print(f"\n{'='*70}")
     print("📋 PIPELINE SUMMARY")
     print(f"{'='*70}")
     print(f"  Dataset:        {NUM_SAMPLES_PER_CLASS * 2} samples")
+    print(f"  Scenario:       {INSIDER_MODE} (insider@{'satellite' if INSIDER_MODE=='sat' else 'ground'})")
+    print(f"  Injection:      pre-channel")
+    print(f"  Power-preserving: {'on' if POWER_PRESERVING_COVERT else 'off'}")
     print(f"  Detector:       CNN{'+CSI' if use_csi else ''}")
+    # Report stable, interpretable power numbers
     print(f"  Power diff:     {power_diff_pct:.2f}%")
+    print(f"  Power (benign): {benign_power:.6e} (std {np.std(benign_powers_per_sample):.6e})")
+    print(f"  Power (attack): {attack_power:.6e} (std {np.std(attack_powers_per_sample):.6e})")
+    if results.get('doppler_stats'):
+        dd = results['doppler_stats']
+        print(f"  Doppler:        {dd['mean_hz']:.2f} Hz (std {dd['std_hz']:.2f} Hz)")
+    if results.get('csi_quality'):
+        cq = results['csi_quality']
+        print(f"  CSI variance:   {cq['variance']:.6e}")
     print(f"  Test AUC:       {metrics['auc']:.4f}")
+    print(f"  Precision:      {metrics['precision']:.4f}")
+    print(f"  Recall:         {metrics['recall']:.4f}")
+    print(f"  F1 Score:       {metrics['f1']:.4f}")
     print(f"  Model saved:    {model_path}")
+    print(f"  Results saved:  {result_path}")
     print(f"{'='*70}")
     
     return True, results

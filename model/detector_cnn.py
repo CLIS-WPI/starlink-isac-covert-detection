@@ -76,6 +76,14 @@ class CNNDetector:
         self.is_trained = False
         self.history = None
         
+        # 🔧 FIX: Store normalization statistics (computed only on train data)
+        self.norm_mean_ofdm = None
+        self.norm_std_ofdm = None
+        self.norm_mean_csi_real = None
+        self.norm_std_csi_real = None
+        self.norm_mean_csi_imag = None
+        self.norm_std_csi_imag = None
+        
         # Set random seeds
         np.random.seed(random_state)
         tf.random.set_seed(random_state)
@@ -262,6 +270,17 @@ class CNNDetector:
         if X_grids.ndim == 2:
             X_grids = X_grids[np.newaxis, :, :]
         
+        # 🔍 DEBUG: Store original for comparison
+        if not hasattr(self, '_debug_preprocess_count'):
+            self._debug_preprocess_count = 0
+        self._debug_preprocess_count += 1
+        debug_mode = (self._debug_preprocess_count <= 3)
+        
+        if debug_mode:
+            print(f"    [Preprocess Debug #{self._debug_preprocess_count}]")
+            print(f"      Input shape: {X_grids.shape}")
+            print(f"      Input magnitude range: [{np.min(np.abs(X_grids)):.6f}, {np.max(np.abs(X_grids)):.6f}]")
+        
         # Extract magnitude and phase
         magnitude = np.abs(X_grids)  # (N, symbols, subcarriers)
         phase = np.angle(X_grids)    # (N, symbols, subcarriers)
@@ -269,26 +288,28 @@ class CNNDetector:
         # Stack as channels: (N, symbols, subcarriers, 2)
         X_processed = np.stack([magnitude, phase], axis=-1).astype(np.float32)
         
-        # 🔧 OPTIMIZED: Hybrid normalization - preserves both global context and spectral patterns
-        # Step 1: Global scale normalization (for inter-sample comparison)
-        global_mag_max = np.max(X_processed[..., 0])
-        if global_mag_max > 0:
-            X_processed[..., 0] /= global_mag_max
+        # 🔧 FIX: Use stored normalization stats (computed only on train) or compute if training
+        # This prevents data leakage: test data should use train statistics
+        if self.norm_mean_ofdm is not None and self.norm_std_ofdm is not None:
+            # Use stored statistics (from training)
+            mean_to_use = self.norm_mean_ofdm
+            std_to_use = self.norm_std_ofdm
+        else:
+            # Compute from current data (only during training)
+            mean_to_use = np.mean(X_processed[..., 0])
+            std_to_use = np.std(X_processed[..., 0])
+            # Store for later use (test/validation)
+            self.norm_mean_ofdm = mean_to_use
+            self.norm_std_ofdm = std_to_use
         
-        # Step 2: Per-sample standardization (preserves relative subcarrier patterns)
-        # This helps CNN learn subtle spectral differences while maintaining scale consistency
-        for i in range(X_processed.shape[0]):
-            mag_sample = X_processed[i, ..., 0]
-            # Use robust normalization (percentile-based) to preserve covert patterns
-            p95 = np.percentile(mag_sample, 95)
-            if p95 > 0:
-                mag_sample = mag_sample / p95
-                # Then rescale to [0, 1] range for CNN
-                mag_min = np.min(mag_sample)
-                mag_max = np.max(mag_sample)
-                if mag_max > mag_min:
-                    mag_sample = (mag_sample - mag_min) / (mag_max - mag_min + 1e-6)
-                X_processed[i, ..., 0] = mag_sample
+        if std_to_use > 0:
+            X_processed[..., 0] = (X_processed[..., 0] - mean_to_use) / std_to_use
+        
+        if debug_mode:
+            print(f"      After z-score: range [{np.min(X_processed[..., 0]):.6f}, {np.max(X_processed[..., 0]):.6f}]")
+            print(f"      Using mean: {mean_to_use:.6f}, std: {std_to_use:.6f}")
+            if self.norm_mean_ofdm is not None:
+                print(f"      (Using stored train statistics)")
         
         # Phase is already in [-π, π], normalize to [-1, 1]
         X_processed[..., 1] /= np.pi
@@ -297,29 +318,68 @@ class CNNDetector:
     
     def _preprocess_csi(self, X_csi):
         """
-        Preprocess CSI data.
+        Preprocess CSI data with dual-channel (real/imag) input.
+        
+        🔧 FIX: Use real/imag channels instead of just magnitude
+        This preserves phase information which is crucial for detection.
         
         Args:
             X_csi: CSI data (N, ...) - can be complex or real
         
         Returns:
-            X_processed: Normalized CSI features
+            X_processed: Normalized CSI features with real/imag channels
         """
         if isinstance(X_csi, tf.Tensor):
             X_csi = X_csi.numpy()
         
-        # If complex, extract magnitude
+        X_csi = np.squeeze(X_csi)
+        
+        # 🔧 FIX: Extract real and imaginary parts (dual-channel)
+        # Instead of just magnitude, use both real and imag for better detection
         if np.iscomplexobj(X_csi):
-            X_csi = np.abs(X_csi)
+            real_part = np.real(X_csi).astype(np.float32)
+            imag_part = np.imag(X_csi).astype(np.float32)
+        else:
+            # If already real, use as real channel and zero for imag
+            real_part = X_csi.astype(np.float32)
+            imag_part = np.zeros_like(real_part)
         
-        X_csi = np.squeeze(X_csi).astype(np.float32)
+        # Stack as channels: (N, ..., 2) for real/imag
+        if real_part.ndim == 2:  # (N, features)
+            X_processed = np.stack([real_part, imag_part], axis=-1)  # (N, features, 2)
+        elif real_part.ndim == 3:  # (N, symbols, subcarriers)
+            X_processed = np.stack([real_part, imag_part], axis=-1)  # (N, symbols, subcarriers, 2)
+        else:
+            # Flatten and reshape if needed
+            real_flat = real_part.reshape(real_part.shape[0], -1)
+            imag_flat = imag_part.reshape(imag_part.shape[0], -1)
+            X_processed = np.stack([real_flat, imag_flat], axis=-1)  # (N, features, 2)
         
-        # Normalize to zero mean, unit variance
-        mean = np.mean(X_csi, axis=0, keepdims=True)
-        std = np.std(X_csi, axis=0, keepdims=True)
-        std = np.where(std > 0, std, 1.0)
+        # 🔧 FIX: Use stored normalization stats (computed only on train) or compute if training
+        # This prevents data leakage: test data should use train statistics
+        if (self.norm_mean_csi_real is not None and self.norm_std_csi_real is not None and
+            self.norm_mean_csi_imag is not None and self.norm_std_csi_imag is not None):
+            # Use stored statistics (from training)
+            mean_real = self.norm_mean_csi_real
+            std_real = self.norm_std_csi_real
+            mean_imag = self.norm_mean_csi_imag
+            std_imag = self.norm_std_csi_imag
+        else:
+            # Compute from current data (only during training)
+            mean_real = np.mean(X_processed[..., 0])
+            std_real = np.std(X_processed[..., 0])
+            mean_imag = np.mean(X_processed[..., 1])
+            std_imag = np.std(X_processed[..., 1])
+            # Store for later use (test/validation)
+            self.norm_mean_csi_real = mean_real
+            self.norm_std_csi_real = std_real
+            self.norm_mean_csi_imag = mean_imag
+            self.norm_std_csi_imag = std_imag
         
-        X_processed = (X_csi - mean) / std
+        if std_real > 0:
+            X_processed[..., 0] = (X_processed[..., 0] - mean_real) / std_real
+        if std_imag > 0:
+            X_processed[..., 1] = (X_processed[..., 1] - mean_imag) / std_imag
         
         return X_processed
     
@@ -370,14 +430,15 @@ class CNNDetector:
         
         print(f"   Final class weights: {class_weight}")
         
-        # Preprocess OFDM data
+        # 🔧 FIX: Preprocess train data FIRST to compute and store normalization stats
+        # This ensures validation/test use train statistics (no data leakage)
         X_train_proc = self._preprocess_ofdm(X_train)
         
         # Auto-detect input shape
         if self.input_shape is None:
             self.input_shape = X_train_proc.shape[1:]  # (symbols, subcarriers, 2)
         
-        # Preprocess CSI if using fusion
+        # Preprocess CSI if using fusion (also computes train statistics)
         X_csi_train_proc = None
         if self.use_csi and X_csi_train is not None:
             X_csi_train_proc = self._preprocess_csi(X_csi_train)
@@ -399,9 +460,11 @@ class CNNDetector:
         else:
             train_data = X_train_proc
         
-        # Prepare validation data
+        # 🔧 FIX: Preprocess validation data AFTER train (uses stored train statistics)
         validation_data = None
         if X_val is not None and y_val is not None:
+            # At this point, normalization stats are already computed from train data
+            # So validation will use train statistics (correct!)
             X_val_proc = self._preprocess_ofdm(X_val)
             if self.use_csi and X_csi_val is not None:
                 X_csi_val_proc = self._preprocess_csi(X_csi_val)

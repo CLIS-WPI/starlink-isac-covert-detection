@@ -124,7 +124,9 @@ def inject_covert_channel(ofdm_frame, resource_grid, covert_rate_mbps,
 # ======================================
 
 def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
-                                scs, covert_amp=None, seed=42):
+                                scs, covert_amp=None, seed=42,
+                                injection_point='sat_downlink',
+                                power_preserving=None):
     """
     Inject covert QPSK symbols at RANDOMIZED positions (when enabled in settings).
 
@@ -143,6 +145,13 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
     # Use centralized config if not explicitly provided
     if covert_amp is None:
         covert_amp = COVERT_AMP
+    # Override power preserving if provided
+    # Priority: explicit arg > POWER_PRESERVING_COVERT > ABLATION_CONFIG
+    from config.settings import POWER_PRESERVING_COVERT, ABLATION_CONFIG
+    if power_preserving is None:
+        pp = POWER_PRESERVING_COVERT if POWER_PRESERVING_COVERT is not None else ABLATION_CONFIG.get('power_preserving_covert', False)
+    else:
+        pp = bool(power_preserving)
     
     if covert_rate_mbps <= 0.0:
         return ofdm_frame, None
@@ -168,10 +177,20 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
         available_indices = np.arange(max_sc)
         selected_subcarriers = np.random.choice(available_indices, size=min(n_subs, len(available_indices)), replace=False)
     else:
-        # 🎯 FIXED: Always use subcarriers 0-15 (or 0 to min(16, n_subs))
-        # This creates a consistent spectral pattern that CNN can learn
-        num_covert_subs = min(16, n_subs)  # Use first 16 subcarriers
-        selected_subcarriers = np.arange(num_covert_subs)
+        # 🎯 FIXED: Use middle band subcarriers 24-39 (instead of 0-15)
+        # Reason: 0-15 often DC/null/edge; pattern gets lost after channel
+        # Middle band is more effective and stable after channel effects
+        num_covert_subs = 16  # Use 16 subcarriers
+        start_sc = 24  # Start from subcarrier 24
+        end_sc = min(start_sc + num_covert_subs, n_subs)  # End at 40 (or n_subs if smaller)
+        selected_subcarriers = np.arange(start_sc, end_sc)
+    
+    # 🔍 DEBUG: Verify selected subcarriers
+    if not hasattr(inject_covert_channel_fixed, '_debug_subs_printed'):
+        print(f"  [Covert Injection] n_subs={n_subs}, num_covert_subs={num_covert_subs}")
+        print(f"  [Covert Injection] Selected subcarriers: {selected_subcarriers.tolist()}")
+        print(f"  [Covert Injection] RANDOMIZE_SUBCARRIERS={RANDOMIZE_SUBCARRIERS}")
+        inject_covert_channel_fixed._debug_subs_printed = True
 
     # ✅ FIXED SYMBOL PATTERN: Always use [1,3,5,7] for consistency
     if RANDOMIZE_SYMBOLS:
@@ -197,19 +216,40 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
     ofdm_np = ofdm_frame.numpy()
     cs = covert_syms.numpy()[0]
 
-    # 🔧 FIX: Weighted additive injection (preserves power better while keeping pattern detectable)
-    # This creates a stronger spectral signature while maintaining power similarity
+    # 🔍 POWER LOGGING (before injection)
+    orig_pw = float(np.mean(np.abs(ofdm_np[0, 0, 0, :, :])**2))
+
+    # 🔧 REALISTIC INJECTION: Relative magnitude boost with power-preserving
+    # Strategy: Additive injection with relative boost, then scale to preserve power
+    if not hasattr(inject_covert_channel_fixed, '_debug_inject_printed'):
+        print(f"  [Covert Injection] Injecting into {len(selected_symbols)} symbols: {selected_symbols}")
+        print(f"  [Covert Injection] Injecting into {len(selected_subcarriers)} subcarriers: {selected_subcarriers.tolist()[:20]}{'...' if len(selected_subcarriers) > 20 else ''}")
+        if pp:
+            print(f"  [Covert Injection] Using RELATIVE BOOST (amp={covert_amp}) with POWER-PRESERVING")
+        else:
+            print(f"  [Covert Injection] Using RELATIVE BOOST (amp={covert_amp}) WITHOUT power-preserving")
+        inject_covert_channel_fixed._debug_inject_printed = True
+    
     for s in selected_symbols:
         for k, sc in enumerate(selected_subcarriers):
             original = ofdm_np[0, 0, 0, s, sc]
             covert = complex(np.asarray(cs[k % cs.shape[0]]).item())
-            # Weighted combination: preserves original signal structure + adds covert pattern
-            # Alpha controls how much original signal to keep (0.6 = 60% original, 40% covert)
-            alpha = 0.6  # Original signal weight
-            beta = 0.4   # Covert signal weight (controlled by COVERT_AMP)
-            ofdm_np[0, 0, 0, s, sc] = alpha * original + beta * covert
+            # 🔧 REALISTIC: Phase-aligned additive injection
+            # Strategy: Align covert signal phase with original to maximize magnitude boost
+            # This creates a stronger but still subtle pattern
+            orig_phase = np.angle(original)
+            orig_mag = np.abs(original)
+            covert_mag = np.abs(covert)
+            # Align phases: covert_phase = orig_phase (constructive interference)
+            covert_aligned = covert_mag * np.exp(1j * orig_phase)
+            # Additive injection with phase alignment
+            ofdm_np[0, 0, 0, s, sc] = original + covert_aligned
 
-    # 🔍 DEBUG: Print injection details
+    # 🔍 POWER LOGGING (after injection, before power-preserving adjustment)
+    after_pw = float(np.mean(np.abs(ofdm_np[0, 0, 0, :, :])**2))
+    diff_pct = (abs(after_pw - orig_pw) / (orig_pw + 1e-12)) * 100.0
+    
+    # 🔍 DEBUG & POWER LOGGING
     mode = "RANDOMIZED" if (RANDOMIZE_SUBCARRIERS or RANDOMIZE_SYMBOLS) else "FIXED"
     if not hasattr(inject_covert_channel_fixed, '_debug_count'):
         inject_covert_channel_fixed._debug_count = 0
@@ -222,11 +262,37 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
         )
         print(f"  🔍 symbols={selected_symbols}, subcarriers={sorted(selected_subcarriers)[:10]}{'...' if len(selected_subcarriers) > 10 else ''}")
 
+    # Power logs
+    try:
+        orig_pw = float(np.mean(np.abs(ofdm_frame.numpy()[0, 0, 0, :, :])**2))
+        after_pw = float(np.mean(np.abs(ofdm_np[0, 0, 0, :, :])**2))
+        diff_pct = (abs(after_pw - orig_pw) / (orig_pw + 1e-12)) * 100.0
+        print(f"  [Covert-{mode}] power: {orig_pw:.6f} -> {after_pw:.6f} (Δ={diff_pct:.2f}%)")
+    except Exception:
+        pass
+
     emitter_location = (
         np.random.uniform(-1000, 1000),
         np.random.uniform(-1000, 1000),
         0.0,
     )
+
+    # Respect power preserving overall if requested
+    if pp:
+        try:
+            final_pw = np.mean(np.abs(ofdm_np[0, 0, 0, :, :]) ** 2)
+            scale = np.sqrt((orig_pw + 1e-12) / (final_pw + 1e-12))
+            ofdm_np[0, 0, 0, :, :] *= scale
+            final_pw_after_scale = np.mean(np.abs(ofdm_np[0, 0, 0, :, :]) ** 2)
+            diff_pct_final = (abs(final_pw_after_scale - orig_pw) / (orig_pw + 1e-12)) * 100.0
+            if inject_covert_channel_fixed._debug_count <= 3:
+                print(f"  [Covert-{mode}] Power-preserving: {orig_pw:.6e} -> {final_pw_after_scale:.6e} (Δ={diff_pct_final:.2f}%)")
+        except Exception as e:
+            if inject_covert_channel_fixed._debug_count <= 3:
+                print(f"  [Covert-{mode}] Power-preserving failed: {e}")
+    else:
+        if inject_covert_channel_fixed._debug_count <= 3:
+            print(f"  [Covert-{mode}] Power: {orig_pw:.6e} -> {after_pw:.6e} (Δ={diff_pct:.2f}%, preserving=off)")
 
     return tf.convert_to_tensor(ofdm_np), emitter_location
 

@@ -16,9 +16,9 @@ SEED = 42  # Random seed for reproducibility
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 500  # 🔧 افزایش از 200 به 500 (total: 1000 samples)
-                              # CNN needs more data to learn the pattern
-                              # With 400 samples, training was unstable
+NUM_SAMPLES_PER_CLASS = 500  # 🔧 کاهش به 500 برای تست سریع‌تر (total: 1000 samples)
+                              # برای مقاله: 1500+ samples
+                              # برای تست: 500 samples کافی است
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"
 MODEL_DIR = "model"
@@ -28,7 +28,7 @@ RESULT_DIR = "result"
 # 🧪 Detection Settings
 # ======================================
 ABLATION_CONFIG = {
-    'power_preserving_covert': True  # ✅ برعکس شد - حالا CNN بهتر یاد می‌گیره!
+    'power_preserving_covert': True  # ✅ برای مقاله: True (power-preserving)
 }
 
 # =======================================================
@@ -36,10 +36,10 @@ ABLATION_CONFIG = {
 # =======================================================
 
 # Covert channel injection parameters
-COVERT_AMP = 0.9  # 🔧 افزایش از 0.7 به 0.9 برای CNN-only (الگوی بسیار قوی)
-                   # برای CNN+CSI: 0.7 کافی است (AUC=0.9952)
-                   # برای CNN-only: نیاز به 0.9 برای یادگیری بهتر
-                   # Trade-off: power diff بیشتر می‌شه (~20-25%) ولی detectable می‌شه
+COVERT_AMP = 0.5  # ✅ برای مقاله: 0.5 (power-preserving, realistic and detectable)
+                   # روند: 0.2→AUC=0.49, 0.3→AUC=0.54, 0.4→AUC=0.60
+                   # 0.5 باید AUC ≥ 0.70 بدهد (هدف حداقلی)
+                   # برای تست/debug: 0.7~0.9 (الگوی قابل تشخیص)
 
 # 🎯 FIXED PATTERN STRATEGY (for consistent CNN learning)
 # Use FIXED band position instead of semi-fixed for better detectability
@@ -51,6 +51,16 @@ USE_SPECTROGRAM = False  # ❌ خاموش - magnitude-only STFT از pattern inf
 SPECTROGRAM_TYPE = "stft"      # Options: "stft", "mel", "both"
 USE_PHASE_FEATURES = True      # 🆕 Extract phase and cyclostationary features
 USE_RESIDUAL_CNN = True
+
+# ====== NEW: Scenario & CSI controls ======
+INSIDER_MODE = 'ground'       # 'sat' (downlink) | 'ground' (uplink->relay)
+USE_REALISTIC_CSI = True      # Enable estimation from pilots (LS/LMMSE)
+CSI_ESTIMATION = 'LS'         # 'LS' now, add 'LMMSE' later
+POWER_PRESERVING_COVERT = True  # ✅ برای مقاله: True (power-preserving, realistic)
+                                 # برای تست/debug: False (الگوی قابل تشخیص)
+MIN_ELEVATION_DEG = 10.0
+NUM_SENSING_SATS = 12
+USE_SGP4 = False              # Off by default; enable with TLE later
 
 # Contiguous band injection (more spectral signature)
 NUM_COVERT_SUBCARRIERS = 16   # 🎯 Reduced from 32 to 16 for stronger per-subcarrier energy

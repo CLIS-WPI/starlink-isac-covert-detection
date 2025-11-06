@@ -39,11 +39,21 @@ def worker_gpu(gpu_id, worker_id, start_idx, end_idx, config, queue):
         config: Configuration dict
         queue: Multiprocessing queue for results
     """
+    # 🔧 FIX: Set random seeds for consistency (prevent GPU-specific randomness)
+    import random
+    from config.settings import SEED
+    
+    # Use deterministic seed per GPU+worker to ensure reproducibility
+    worker_seed = SEED + gpu_id * 1000 + worker_id * 100
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+    
     # Set GPU for this worker
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
     # Import after setting GPU
     import tensorflow as tf
+    tf.random.set_seed(worker_seed)  # TensorFlow seed
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         tf.config.set_visible_devices(gpus[0], 'GPU')
@@ -81,9 +91,10 @@ def worker_gpu(gpu_id, worker_id, start_idx, end_idx, config, queue):
     isac = ISACSystem()
     
     # Load or pre-generate topologies (if NTN)
-    # 🔧 OPTIMIZATION: Use file locking to prevent multiple workers from regenerating cache
+    # 🔧 FIX: Use file locking to prevent race conditions
     if config['use_ntn']:
         cache_path = config.get('topology_cache_path', 'cache/ntn_topologies.pkl')
+        cache_lock_path = cache_path + '.lock'
         
         # Try to load from cache first
         if os.path.exists(cache_path):
@@ -94,19 +105,39 @@ def worker_gpu(gpu_id, worker_id, start_idx, end_idx, config, queue):
                 # Load failed, but don't regenerate (another worker might be doing it)
                 print(f"[GPU {gpu_id}:W{worker_id}] Cache load failed, using empty cache...")
         else:
-            # First time: only first worker generates cache
-            if worker_id == 0:
+            # 🔧 FIX: Use file locking to prevent multiple workers from regenerating cache
+            # Only first worker (GPU0:W0) generates cache, others wait
+            if gpu_id == 0 and worker_id == 0:
                 print(f"[GPU {gpu_id}:W{worker_id}] No cache found, generating topologies...")
-                isac.precompute_topologies(count=config['topology_cache_size'])
-                isac.save_topology_cache(cache_path)
+                # Create lock file
+                try:
+                    with open(cache_lock_path, 'w') as f:
+                        f.write(f"generating by GPU{gpu_id}:W{worker_id}")
+                    isac.precompute_topologies(count=config['topology_cache_size'])
+                    isac.save_topology_cache(cache_path)
+                    # Remove lock file
+                    if os.path.exists(cache_lock_path):
+                        os.remove(cache_lock_path)
+                    print(f"[GPU {gpu_id}:W{worker_id}] ✅ Topology cache generated and saved!")
+                except Exception as e:
+                    print(f"[GPU {gpu_id}:W{worker_id}] ⚠️ Cache generation failed: {e}")
+                    if os.path.exists(cache_lock_path):
+                        os.remove(cache_lock_path)
             else:
-                # Other workers wait a bit for cache to be created
-                # Note: 'time' is already imported at top of file
-                time.sleep(2)
+                # Other workers wait for cache to be created (with timeout)
+                max_wait = 30  # seconds
+                wait_time = 0
+                while not os.path.exists(cache_path) and wait_time < max_wait:
+                    if os.path.exists(cache_lock_path):
+                        print(f"[GPU {gpu_id}:W{worker_id}] Waiting for cache generation (lock exists)...")
+                    time.sleep(1)
+                    wait_time += 1
+                
                 if os.path.exists(cache_path):
+                    print(f"[GPU {gpu_id}:W{worker_id}] Loading topology cache...")
                     isac.load_topology_cache(cache_path)
                 else:
-                    print(f"[GPU {gpu_id}:W{worker_id}] Cache still not ready, continuing without cache...")
+                    print(f"[GPU {gpu_id}:W{worker_id}] ⚠️ Cache still not ready after {max_wait}s, continuing without cache...")
     
     # Generate dataset subset
     num_samples = end_idx - start_idx
@@ -158,6 +189,7 @@ def merge_datasets(datasets):
     merged = {
         'iq_samples': [],
         'csi': [],
+        'csi_est': [],
         'radar_echo': [],
         'labels': [],
         'emitter_locations': [],
@@ -165,11 +197,19 @@ def merge_datasets(datasets):
         'tx_time_padded': [],
         'rx_time_b_full': [],
         'tx_grids': [],   # ✅ Pre-channel OFDM grids (clean)
-        'rx_grids': []    # ✅ Post-channel OFDM grids (with channel effects + injection)
+        'rx_grids': [],    # ✅ Post-channel OFDM grids (with channel effects + injection)
+        'meta': []
     }
 
+    # 🔧 FIX: Sort datasets by (gpu_id, worker_id, start_idx) to ensure consistent merge order
+    datasets_sorted = sorted(datasets, key=lambda ds: (
+        ds.get('_gpu_id', 0),
+        ds.get('_worker_id', 0),
+        ds.get('_start_idx', 0)
+    ))
+    
     # === Merge from each worker ===
-    for ds in datasets:
+    for ds in datasets_sorted:
         gpu_id = ds.pop('_gpu_id', 0)
         worker_id = ds.pop('_worker_id', 0)
         start_idx = ds.pop('_start_idx', 0)
@@ -178,19 +218,33 @@ def merge_datasets(datasets):
         print(f"  Merging GPU {gpu_id}:W{worker_id} data (samples {start_idx}-{end_idx})...")
 
         # Merge all array-like fields (if they exist)
+        # 🔧 FIX: Exclude csi_est from general loop to prevent duplicate
         for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids', 'rx_grids']:
             if key in ds and ds[key] is not None:
                 merged[key].append(ds[key])
+        
+        # 🔧 FIX: Explicitly merge csi_est (handle separately to avoid duplicates)
+        if 'csi_est' in ds and ds['csi_est'] is not None:
+            merged['csi_est'].append(ds['csi_est'])
 
         # Merge list-like fields
         if 'emitter_locations' in ds:
             merged['emitter_locations'].extend(ds['emitter_locations'])
         if 'satellite_receptions' in ds:
             merged['satellite_receptions'].extend(ds['satellite_receptions'])
+        if 'meta' in ds and ds['meta'] is not None:
+            # 🔧 FIX: Ensure meta is a list (not tuple or dict)
+            if isinstance(ds['meta'], (list, tuple)):
+                merged['meta'].extend(ds['meta'])
+            else:
+                merged['meta'].append(ds['meta'])
 
     # === Concatenate all numpy arrays safely ===
     print("  Concatenating arrays...")
-    for key in ['iq_samples', 'csi', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids', 'rx_grids']:
+    # 🔧 FIX: Ensure all keys exist before concatenation
+    for key in ['iq_samples', 'csi', 'csi_est', 'radar_echo', 'labels', 'tx_time_padded', 'rx_time_b_full', 'tx_grids', 'rx_grids']:
+        if key not in merged:
+            merged[key] = []
         if len(merged[key]) > 0:
             try:
                 # Check if shapes are consistent
@@ -349,6 +403,25 @@ def main():
         print_dataset_statistics(merged_dataset, detailed=True)
     except Exception as e:
         print(f"\n⚠️ Could not print detailed statistics: {e}")
+    
+    # 🔧 NEW: Run consistency checker after merge
+    print("\n" + "="*60)
+    print("🔍 Running consistency checker...")
+    print("="*60)
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, 'check_dataset_consistency.py', '--dataset', save_path],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        print(result.stdout)
+        if result.stderr:
+            print("Warnings:", result.stderr)
+    except Exception as e:
+        print(f"⚠️ Consistency checker failed: {e}")
+        print("  → Run manually: python3 check_dataset_consistency.py")
 
 
 if __name__ == "__main__":
