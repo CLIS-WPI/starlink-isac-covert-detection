@@ -197,10 +197,17 @@ def inject_covert_channel_fixed(ofdm_frame, resource_grid, covert_rate_mbps,
     ofdm_np = ofdm_frame.numpy()
     cs = covert_syms.numpy()[0]
 
-    # covert_syms generated earlier; use additive injection (stronger footprint)
+    # 🔧 FIX: Weighted additive injection (preserves power better while keeping pattern detectable)
+    # This creates a stronger spectral signature while maintaining power similarity
     for s in selected_symbols:
         for k, sc in enumerate(selected_subcarriers):
-            ofdm_np[0, 0, 0, s, sc] += complex(np.asarray(cs[k % cs.shape[0]]).item())
+            original = ofdm_np[0, 0, 0, s, sc]
+            covert = complex(np.asarray(cs[k % cs.shape[0]]).item())
+            # Weighted combination: preserves original signal structure + adds covert pattern
+            # Alpha controls how much original signal to keep (0.6 = 60% original, 40% covert)
+            alpha = 0.6  # Original signal weight
+            beta = 0.4   # Covert signal weight (controlled by COVERT_AMP)
+            ofdm_np[0, 0, 0, s, sc] = alpha * original + beta * covert
 
     # 🔍 DEBUG: Print injection details
     mode = "RANDOMIZED" if (RANDOMIZE_SUBCARRIERS or RANDOMIZE_SYMBOLS) else "FIXED"

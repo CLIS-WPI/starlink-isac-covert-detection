@@ -36,10 +36,10 @@ ABLATION_CONFIG = {
 # =======================================================
 
 # Covert channel injection parameters
-COVERT_AMP = 0.5  # 🔧 افزایش از 0.3 به 0.5 برای الگوی بسیار قوی
-                   # با 0.3 pattern visible بود ولی learnable نبود (AUC=0.47)
-                   # با 0.5 pattern خیلی قوی‌تر می‌شه، variance کمتر می‌شه
-                   # Trade-off: power diff بیشتر می‌شه (~10-15%) ولی detectable می‌شه
+COVERT_AMP = 0.9  # 🔧 افزایش از 0.7 به 0.9 برای CNN-only (الگوی بسیار قوی)
+                   # برای CNN+CSI: 0.7 کافی است (AUC=0.9952)
+                   # برای CNN-only: نیاز به 0.9 برای یادگیری بهتر
+                   # Trade-off: power diff بیشتر می‌شه (~20-25%) ولی detectable می‌شه
 
 # 🎯 FIXED PATTERN STRATEGY (for consistent CNN learning)
 # Use FIXED band position instead of semi-fixed for better detectability
@@ -86,10 +86,17 @@ NOISE_STD = 0.01  # 🎯 کاهش نویز برای یادگیری بهتر
 
 # 🎯 ADVANCED TRAINING SETTINGS
 USE_FOCAL_LOSS = True
-FOCAL_LOSS_GAMMA = 2.0         # Focus on hard examples
-FOCAL_LOSS_ALPHA = 0.25        # Class weighting
+FOCAL_LOSS_GAMMA = 2.5         # 🔧 افزایش از 2.0 به 2.5 (focus بیشتر روی hard examples)
+FOCAL_LOSS_ALPHA = 0.5         # 🔧 افزایش از 0.25 به 0.5 (balance بهتر)
 USE_DATA_AUGMENTATION = True   # 🆕 Apply data augmentation
 AUGMENTATION_FACTOR = 1        # Generate 2x more samples via augmentation
+
+# 🔧 OPTIMIZATION: Learning rate scheduling
+USE_LEARNING_RATE_SCHEDULER = True
+INITIAL_LR = 0.001             # Initial learning rate
+LR_DECAY_FACTOR = 0.5          # Decay factor
+LR_PATIENCE = 5                # Reduce LR if no improvement for N epochs
+MIN_LR = 1e-6                  # Minimum learning rate
 
 VALIDATION_SPLIT = 0.3  # 30% for test set
 

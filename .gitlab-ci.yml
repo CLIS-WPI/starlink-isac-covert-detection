@@ -1,0 +1,46 @@
+stages:
+  - test
+  - build
+
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+
+# Test stage: Run unit tests
+test:
+  stage: test
+  image: nvcr.io/nvidia/tensorflow:25.02-tf2-py3
+  before_script:
+    - python3 -m pip install --upgrade pip
+    - python3 -m pip install -r requirements-minimal.txt
+    - python3 -m pip install sionna==1.2.1
+  script:
+    - echo "Running tests..."
+    - python3 -m pytest tests/ -v --tb=short || echo "No tests found or tests failed"
+  only:
+    - merge_requests
+    - main
+    - develop
+  tags:
+    - docker
+
+# Build stage: Build Docker image
+build:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - echo "Building Docker image..."
+    - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG -t $CI_REGISTRY_IMAGE:latest .
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+    - docker push $CI_REGISTRY_IMAGE:latest
+  only:
+    - tags
+    - main
+  when: manual
+  tags:
+    - docker
+

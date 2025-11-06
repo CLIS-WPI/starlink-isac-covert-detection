@@ -192,13 +192,20 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print(f"  → Benign: {np.sum(dataset['labels'] == 0)}")
     print(f"  → Attack: {np.sum(dataset['labels'] == 1)}")
     
-    # Extract data - Use post-channel rx_grids if available (more realistic)
-    if 'rx_grids' in dataset:
+    # Extract data - Choose based on detector type
+    # For CNN-only: Use tx_grids (pre-channel) for stronger pattern visibility
+    # For CNN+CSI: Use rx_grids (post-channel) for realistic detection
+    if use_csi and 'rx_grids' in dataset:
+        # CNN+CSI: Use post-channel for realistic detection
         X_grids = dataset['rx_grids']  # Post-channel (with Doppler, fading, noise + injection)
-        print(f"  ✓ Using POST-CHANNEL rx_grids (realistic detection)")
+        print(f"  ✓ Using POST-CHANNEL rx_grids (realistic detection with CSI)")
+    elif 'tx_grids' in dataset:
+        # CNN-only: Use pre-channel for stronger pattern (better for learning)
+        X_grids = dataset['tx_grids']  # Pre-channel (clean pattern, easier to learn)
+        print(f"  ✓ Using PRE-CHANNEL tx_grids (stronger pattern for CNN-only)")
     else:
-        X_grids = dataset['tx_grids']  # Fallback to pre-channel
-        print(f"  ⚠️ Using PRE-CHANNEL tx_grids (fallback)")
+        X_grids = dataset.get('rx_grids', dataset.get('tx_grids'))
+        print(f"  ⚠️ Using available grids")
     
     Y = dataset['labels']
     

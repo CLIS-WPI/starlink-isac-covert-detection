@@ -121,6 +121,21 @@ class CNNDetector:
                          name=f"{name_prefix}_conv3")(x)
         x = layers.BatchNormalization(name=f"{name_prefix}_bn3")(x)
         x = layers.Activation('relu', name=f"{name_prefix}_act3")(x)
+        
+        # 🔧 OPTIMIZATION: Add spatial attention for subcarrier pattern detection
+        # This helps focus on frequencies where covert injection occurs
+        attention_conv = layers.Conv2D(1, (1, 1), activation='sigmoid', 
+                                       name=f"{name_prefix}_attention")(x)
+        x = layers.Multiply(name=f"{name_prefix}_attn_mult")([x, attention_conv])
+        
+        # 🔧 OPTIMIZATION: Add one more conv block for deeper pattern learning
+        x = layers.Conv2D(256, (3, 3), padding='same',
+                         kernel_regularizer=regularizers.l2(0.001),
+                         name=f"{name_prefix}_conv4")(x)
+        x = layers.BatchNormalization(name=f"{name_prefix}_bn4")(x)
+        x = layers.Activation('relu', name=f"{name_prefix}_act4")(x)
+        x = layers.Dropout(self.dropout_rate * 0.5, name=f"{name_prefix}_drop4")(x)
+        
         x = layers.GlobalAveragePooling2D(name=f"{name_prefix}_gap")(x)
         
         return inputs, x
@@ -254,13 +269,26 @@ class CNNDetector:
         # Stack as channels: (N, symbols, subcarriers, 2)
         X_processed = np.stack([magnitude, phase], axis=-1).astype(np.float32)
         
-        # 🔧 GLOBAL normalization instead of per-sample
-        # This preserves relative differences between samples (critical for detection!)
-        # Old: mag_max per sample → destroyed pattern
-        # New: global max across ALL samples → preserves pattern
+        # 🔧 OPTIMIZED: Hybrid normalization - preserves both global context and spectral patterns
+        # Step 1: Global scale normalization (for inter-sample comparison)
         global_mag_max = np.max(X_processed[..., 0])
         if global_mag_max > 0:
             X_processed[..., 0] /= global_mag_max
+        
+        # Step 2: Per-sample standardization (preserves relative subcarrier patterns)
+        # This helps CNN learn subtle spectral differences while maintaining scale consistency
+        for i in range(X_processed.shape[0]):
+            mag_sample = X_processed[i, ..., 0]
+            # Use robust normalization (percentile-based) to preserve covert patterns
+            p95 = np.percentile(mag_sample, 95)
+            if p95 > 0:
+                mag_sample = mag_sample / p95
+                # Then rescale to [0, 1] range for CNN
+                mag_min = np.min(mag_sample)
+                mag_max = np.max(mag_sample)
+                if mag_max > mag_min:
+                    mag_sample = (mag_sample - mag_min) / (mag_max - mag_min + 1e-6)
+                X_processed[i, ..., 0] = mag_sample
         
         # Phase is already in [-π, π], normalize to [-1, 1]
         X_processed[..., 1] /= np.pi
@@ -317,9 +345,15 @@ class CNNDetector:
         Returns:
             history: Training history
         """
-        # 🎯 Class weights: Default to balanced, can be adjusted if needed
+        # 🔧 FIX: Auto-compute class weights if not provided (handles imbalance automatically)
         if class_weight is None:
-            class_weight = {0: 1.0, 1: 1.0}
+            from sklearn.utils.class_weight import compute_class_weight
+            classes = np.unique(y_train)
+            class_weights = compute_class_weight('balanced', classes=classes, y=y_train)
+            class_weight = {i: float(w) for i, w in zip(classes, class_weights)}
+            print(f"  📊 Auto-computed class weights: {class_weight}")
+        else:
+            print(f"  📊 Using provided class weights: {class_weight}")
         
         # Check class balance and warn if needed
         unique, counts = np.unique(y_train, return_counts=True)
@@ -332,9 +366,9 @@ class CNNDetector:
             imbalance_ratio = max(counts) / min(counts)
             if imbalance_ratio > 1.5:
                 print(f"   ⚠️  Class imbalance detected (ratio: {imbalance_ratio:.2f})")
-                print(f"   Consider adjusting class_weight parameter")
+                print(f"   → Using auto-computed class weights to balance training")
         
-        print(f"   Using class weights: {class_weight}")
+        print(f"   Final class weights: {class_weight}")
         
         # Preprocess OFDM data
         X_train_proc = self._preprocess_ofdm(X_train)
