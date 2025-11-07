@@ -165,7 +165,11 @@ def print_dataset_statistics(dataset_dict, detailed=True):
         print(f"\n📍 Emitter Locations:")
         emitters = dataset_dict['emitter_locations']
         
-        attack_emitters = [emitters[i] for i, label in enumerate(labels) if label == 1 and emitters[i] is not None]
+        # 🔧 FIX: Check bounds to prevent index out of range
+        attack_emitters = []
+        for i, label in enumerate(labels):
+            if label == 1 and i < len(emitters) and emitters[i] is not None:
+                attack_emitters.append(emitters[i])
         
         if attack_emitters:
             attack_emitters = np.array(attack_emitters)

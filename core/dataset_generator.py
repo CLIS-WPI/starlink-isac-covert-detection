@@ -397,7 +397,7 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         sat_rx_list = []
         for sat_idx, (sat_pos, sat_vel) in enumerate(zip(base_positions[:num_satellites], base_velocities[:num_satellites])):
 
-            # 🔧 SCENARIO B: Two-channel relay (uplink → relay → downlink)
+            # 🔧 Phase 6: SCENARIO B - Two-channel relay (uplink → relay → downlink)
             from config.settings import INSIDER_MODE
             from core.scenario_b_relay import (
                 amplify_and_forward_relay,
@@ -409,9 +409,11 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             tx_grid_used = tx_grid_injected if is_attack else tx_grid_clean
             tx_time_for_sat = isac_system.modulator(tx_grid_used)
             
-            # 🔧 SCENARIO B: Uplink channel (ground → satellite)
+            # 🔧 Phase 6: SCENARIO B - Full dual-hop implementation
             if INSIDER_MODE == 'ground':
-                # Uplink: emitter → satellite
+                # ============================================================
+                # UPLINK CHANNEL (Ground → Satellite)
+                # ============================================================
                 emitter_pos = attacked_sat_pos if is_attack else np.array([50e3, 50e3, 0.0])
                 emitter_vel = np.array([0.0, 0.0, 0.0])  # Ground is stationary
                 
@@ -424,25 +426,208 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                     )
                 except Exception:
                     f_d_ul = 0.0
-
-            # generate channel with topology if available (same as your original)
-            if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
-                if is_attack:
-                    ut_pos = tf.constant([[attacked_sat_pos]], dtype=tf.float32)
+                
+                # Generate UL channel (same topology setup as before)
+                if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
+                    ut_pos_ul = tf.constant([[emitter_pos]], dtype=tf.float32)
+                    bs_pos_ul = tf.constant([[sat_pos]], dtype=tf.float32)
+                    bs_vel_ul = tf.constant([[sat_vel]], dtype=tf.float32)
+                    ut_vel_ul = tf.zeros_like(ut_pos_ul)
+                    try:
+                        isac_system.CHANNEL_MODEL.set_topology(ut_pos_ul, bs_pos_ul, ut_vel_ul, bs_vel_ul)
+                        a_ul, tau_ul = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
+                    except Exception:
+                        a_ul, tau_ul = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
                 else:
-                    ut_pos = tf.constant([[[50e3, 50e3, 0.0]]], dtype=tf.float32)
-                bs_pos = tf.constant([[sat_pos]], dtype=tf.float32)
-                bs_vel = tf.constant([[sat_vel]], dtype=tf.float32)
-                ut_vel = tf.zeros_like(ut_pos)
-                try:
-                    isac_system.CHANNEL_MODEL.set_topology(ut_pos, bs_pos, ut_vel, bs_vel)
-                    a, tau = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
-                except Exception:
+                    a_ul, tau_ul = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
+                
+                    # Sanitize UL CIR
+                    a_ul_is_finite = tf.logical_and(
+                        tf.math.is_finite(tf.math.real(a_ul)),
+                        tf.math.is_finite(tf.math.imag(a_ul))
+                    )
+                    a_ul = tf.where(a_ul_is_finite, a_ul, tf.zeros_like(a_ul))
+                    tau_ul = tf.where(tf.math.is_finite(tau_ul), tau_ul, tf.zeros_like(tau_ul))
+                    
+                    # UL CIR -> time channel
+                    l_min, l_max = time_lag_discrete_time_channel(isac_system.rg.bandwidth)
+                    h_time_ul = cir_to_time_channel(isac_system.rg.bandwidth, a_ul, tau_ul, l_min, l_max, normalize=True)
+                    
+                    if h_time_ul.shape[-2] == 1:
+                        mult = [1] * len(h_time_ul.shape)
+                        mult[-2] = isac_system.NUM_OFDM_SYMBOLS
+                        h_time_ul = tf.tile(h_time_ul, mult)
+                    
+                    h_freq_ul = time_to_ofdm_channel(h_time_ul, isac_system.rg, l_min)
+                    h_freq_ul = tf.reduce_mean(h_freq_ul, axis=4)
+                    h_freq_ul = tf.reduce_mean(h_freq_ul, axis=2)
+                    h_f_ul = h_freq_ul[:, 0, 0, :, :]
+                    h_f_ul = tf.expand_dims(h_f_ul, axis=1)
+                    h_f_ul = tf.expand_dims(h_f_ul, axis=2)
+                    
+                    # Apply UL channel
+                    y_grid_ul = tx_grid_used * h_f_ul
+                    ebno_db_ul = float(tf.random.uniform((), *ebno_db_range))
+                    if ebno_db_ul < 10.0:
+                        ebno_db_ul = 10.0 + np.random.uniform(0, 2.0)
+                    
+                    # Convert to time domain for UL
+                    y_time_ul = isac_system.modulator(y_grid_ul)
+                    y_time_ul_flat = tf.squeeze(y_time_ul)
+                    
+                    # Apply UL Doppler
+                    y_time_ul_dopp = isac_system.apply_doppler_time(y_time_ul_flat, float(f_d_ul))
+                    
+                    # Add UL noise
+                    rx_pow_ul = tf.reduce_mean(tf.abs(y_time_ul_dopp)**2)
+                    rx_pow_ul = tf.maximum(rx_pow_ul, 1e-20)
+                    esn0_ul = 10.0**(ebno_db_ul/10.0)
+                    sigma2_ul = rx_pow_ul / (esn0_ul + 1e-12)
+                    std_ul = tf.sqrt(tf.cast(tf.maximum(sigma2_ul / 2.0, 1e-30), tf.float32))
+                    n_ul = tf.complex(
+                        tf.random.normal(tf.shape(y_time_ul_dopp), stddev=std_ul),
+                        tf.random.normal(tf.shape(y_time_ul_dopp), stddev=std_ul)
+                    )
+                    y_time_ul_noisy = y_time_ul_dopp + n_ul
+                    
+                    # ============================================================
+                    # RELAY (Amplify-and-Forward with AGC + Delay)
+                    # ============================================================
+                    # Phase 6: Random delay (3-5 symbols, ~0.2-0.3 ms at 15 kHz SCS)
+                    delay_samples = np.random.randint(3, 6)
+                    
+                    # AGC: Target power = input power (preserve power)
+                    target_power_relay = tf.reduce_mean(tf.abs(y_time_ul_noisy)**2)
+                    
+                    y_time_relay, gain_relay, delay_applied = amplify_and_forward_relay(
+                        y_time_ul_noisy,
+                        target_power=target_power_relay,
+                        gain_limit_db=30.0,
+                        delay_samples=delay_samples,
+                        clip_range=(-2.0, 2.0)
+                    )
+                    
+                    # ============================================================
+                    # DOWNLINK CHANNEL (Satellite → Ground Receiver)
+                    # ============================================================
+                    # Compute DL Doppler (satellite → ground receiver)
+                    receiver_pos = np.array([50e3, 50e3, 0.0])  # Ground receiver position
+                    receiver_vel = np.array([0.0, 0.0, 0.0])
+                    
+                    try:
+                        f_d_dl = compute_doppler_dl(
+                            sat_pos, sat_vel,
+                            receiver_pos, receiver_vel,
+                            isac_system.CARRIER_FREQUENCY
+                        )
+                    except Exception:
+                        f_d_dl = 0.0
+                    
+                    # Generate DL channel
+                    if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
+                        ut_pos_dl = tf.constant([[receiver_pos]], dtype=tf.float32)
+                        bs_pos_dl = tf.constant([[sat_pos]], dtype=tf.float32)
+                        bs_vel_dl = tf.constant([[sat_vel]], dtype=tf.float32)
+                        ut_vel_dl = tf.zeros_like(ut_pos_dl)
+                        try:
+                            isac_system.CHANNEL_MODEL.set_topology(ut_pos_dl, bs_pos_dl, ut_vel_dl, bs_vel_dl)
+                            a_dl, tau_dl = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
+                        except Exception:
+                            a_dl, tau_dl = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
+                    else:
+                        a_dl, tau_dl = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
+                    
+                    # Sanitize DL CIR
+                    a_dl_is_finite = tf.logical_and(
+                        tf.math.is_finite(tf.math.real(a_dl)),
+                        tf.math.is_finite(tf.math.imag(a_dl))
+                    )
+                    a_dl = tf.where(a_dl_is_finite, a_dl, tf.zeros_like(a_dl))
+                    tau_dl = tf.where(tf.math.is_finite(tau_dl), tau_dl, tf.zeros_like(tau_dl))
+                    
+                    # DL CIR -> time channel
+                    h_time_dl = cir_to_time_channel(isac_system.rg.bandwidth, a_dl, tau_dl, l_min, l_max, normalize=True)
+                    
+                    if h_time_dl.shape[-2] == 1:
+                        mult = [1] * len(h_time_dl.shape)
+                        mult[-2] = isac_system.NUM_OFDM_SYMBOLS
+                        h_time_dl = tf.tile(h_time_dl, mult)
+                    
+                    h_freq_dl = time_to_ofdm_channel(h_time_dl, isac_system.rg, l_min)
+                    h_freq_dl = tf.reduce_mean(h_freq_dl, axis=4)
+                    h_freq_dl = tf.reduce_mean(h_freq_dl, axis=2)
+                    h_f_dl = h_freq_dl[:, 0, 0, :, :]
+                    h_f_dl = tf.expand_dims(h_f_dl, axis=1)
+                    h_f_dl = tf.expand_dims(h_f_dl, axis=2)
+                    
+                    # Convert relay output to frequency domain for channel application
+                    y_grid_relay = isac_system.demodulator(y_time_relay)
+                    y_grid_dl = y_grid_relay * h_f_dl
+                    
+                    # Apply DL channel in time domain
+                    y_time_dl = isac_system.modulator(y_grid_dl)
+                    y_time_dl_flat = tf.squeeze(y_time_dl)
+                    
+                    # Apply DL Doppler
+                    y_time_dl_dopp = isac_system.apply_doppler_time(y_time_dl_flat, float(f_d_dl))
+                    
+                    # Add DL noise
+                    ebno_db_dl = float(tf.random.uniform((), *ebno_db_range))
+                    if ebno_db_dl < 10.0:
+                        ebno_db_dl = 10.0 + np.random.uniform(0, 2.0)
+                    
+                    rx_pow_dl = tf.reduce_mean(tf.abs(y_time_dl_dopp)**2)
+                    rx_pow_dl = tf.maximum(rx_pow_dl, 1e-20)
+                    esn0_dl = 10.0**(ebno_db_dl/10.0)
+                    sigma2_dl = rx_pow_dl / (esn0_dl + 1e-12)
+                    std_dl = tf.sqrt(tf.cast(tf.maximum(sigma2_dl / 2.0, 1e-30), tf.float32))
+                    n_dl = tf.complex(
+                        tf.random.normal(tf.shape(y_time_dl_dopp), stddev=std_dl),
+                        tf.random.normal(tf.shape(y_time_dl_dopp), stddev=std_dl)
+                    )
+                    y_time_noisy = y_time_dl_dopp + n_dl
+                    y_grid_noisy = isac_system.demodulator(y_time_noisy)
+                    y_time_noisy_flat = tf.squeeze(y_time_noisy)
+                
+                # Store Scenario B metadata (will be added to meta_dict later)
+                # Note: We store this in a way that can be accessed later in the loop
+                # For now, we'll store it in a temporary variable that will be added to meta
+                scenario_b_meta = {
+                    'fd_ul': float(f_d_ul),
+                    'fd_dl': float(f_d_dl),
+                    'G_r_mean': float(gain_relay),
+                    'delay_samples': int(delay_applied),
+                    'snr_ul': float(ebno_db_ul),
+                    'snr_dl': float(ebno_db_dl)
+                }
+                # Store in a way that can be accessed later (use sample index as key)
+                if not hasattr(amplify_and_forward_relay, '_scenario_b_meta_dict'):
+                    amplify_and_forward_relay._scenario_b_meta_dict = {}
+                amplify_and_forward_relay._scenario_b_meta_dict[i] = scenario_b_meta
+            
+            # ============================================================
+            # SCENARIO A: Single downlink channel (unchanged)
+            # ============================================================
+            # This block runs ONLY for Scenario A (INSIDER_MODE == 'sat')
+            if INSIDER_MODE != 'ground':
+                # generate channel with topology if available (same as your original)
+                if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
+                    if is_attack:
+                        ut_pos = tf.constant([[attacked_sat_pos]], dtype=tf.float32)
+                    else:
+                        ut_pos = tf.constant([[[50e3, 50e3, 0.0]]], dtype=tf.float32)
+                    bs_pos = tf.constant([[sat_pos]], dtype=tf.float32)
+                    bs_vel = tf.constant([[sat_vel]], dtype=tf.float32)
+                    ut_vel = tf.zeros_like(ut_pos)
+                    try:
+                        isac_system.CHANNEL_MODEL.set_topology(ut_pos, bs_pos, ut_vel, bs_vel)
+                        a, tau = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
+                    except Exception:
+                        a, tau = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
+                else:
                     a, tau = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
-            else:
-                a, tau = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
-
-            # 🛡️ CRITICAL: Sanitize CIR parameters before use (prevent NaN propagation)
+                
+                # 🛡️ CRITICAL: Sanitize CIR parameters before use (prevent NaN propagation)
             # For complex 'a', check real and imaginary parts separately
             a_is_finite = tf.logical_and(
                 tf.math.is_finite(tf.math.real(a)),
@@ -538,51 +723,44 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                 rx_grid_squeezed = tf.squeeze(y_grid_noisy, axis=[1, 2])
                 rx_grid_np = rx_grid_squeezed.numpy().astype(np.complex64)
                 all_rx_grids.append((i, rx_grid_np))  # 🔧 FIX: Store with index for proper alignment
-                # 🔧 IMPROVED: CSI LS estimate from PILOTS only, then interpolate
+                
+                # 🔧 Phase 5: Enhanced CSI estimation with quality metrics
+                from core.csi_estimation import (
+                    estimate_csi_ls_smooth, 
+                    estimate_csi_lmmse_simple,
+                    compute_csi_quality_metrics
+                )
+                from config.settings import CSI_ESTIMATION, USE_REALISTIC_CSI
+                
                 tx_squeezed = tf.squeeze(tx_grid_used, axis=[1, 2])  # (symbols, subcarriers)
                 rx_squeezed = rx_grid_squeezed  # (symbols, subcarriers)
                 
-                # Get pilot positions from resource grid
-                # Kronecker pattern: pilots at symbols [2, 7] on all subcarriers
+                # Convert to numpy for CSI estimation
+                tx_np = tx_squeezed.numpy()
+                rx_np = rx_squeezed.numpy()
+                
+                # Estimate CSI based on method
                 pilot_symbols = [2, 7]  # From isac_system.rg config
-                num_symbols, num_subcarriers = rx_squeezed.shape[0], rx_squeezed.shape[1]
                 
-                # Estimate CSI at pilot symbols only
-                h_est_pilots = []
-                pilot_positions = []
-                for sym_idx in pilot_symbols:
-                    if sym_idx < num_symbols:
-                        for sc_idx in range(num_subcarriers):
-                            tx_pilot = tx_squeezed[sym_idx, sc_idx]
-                            rx_pilot = rx_squeezed[sym_idx, sc_idx]
-                            if tf.abs(tx_pilot) > 1e-9:
-                                h_pilot = rx_pilot / tx_pilot
-                                h_est_pilots.append(h_pilot.numpy())
-                                pilot_positions.append((sym_idx, sc_idx))
-                
-                # Interpolate: for each symbol, use average of pilot symbols
-                # For subcarriers, use nearest neighbor or average
-                h_est_np = np.zeros((num_symbols, num_subcarriers), dtype=np.complex64)
-                
-                if len(h_est_pilots) > 0:
-                    h_est_pilots = np.array(h_est_pilots)
-                    pilot_positions = np.array(pilot_positions)
-                    
-                    # For each tone, find nearest pilot
-                    for sym_idx in range(num_symbols):
-                        for sc_idx in range(num_subcarriers):
-                            # Find nearest pilot
-                            distances = np.abs(pilot_positions[:, 0] - sym_idx) + np.abs(pilot_positions[:, 1] - sc_idx)
-                            nearest_idx = np.argmin(distances)
-                            h_est_np[sym_idx, sc_idx] = h_est_pilots[nearest_idx]
+                if USE_REALISTIC_CSI and CSI_ESTIMATION == 'LMMSE':
+                    # Phase 5: LMMSE estimation
+                    h_est_np = estimate_csi_lmmse_simple(tx_np, rx_np, pilot_symbols, snr_db=ebno_db)
                 else:
-                    # Fallback: simple division (original method)
-                    tx_np = tx_squeezed.numpy()
-                    rx_np = rx_squeezed.numpy()
-                    denom = np.where(np.abs(tx_np) > 1e-9, tx_np, 1e-9)
-                    h_est_np = rx_np / denom
+                    # LS with smoothing (default)
+                    h_est_np = estimate_csi_ls_smooth(tx_np, rx_np, pilot_symbols, smoothing=True)
+                
+                # Phase 5: Compute CSI quality metrics
+                # Note: True CSI (h_true) is not available in this simulation,
+                # but we can compute variance-based quality metrics
+                csi_quality = compute_csi_quality_metrics(h_est_np, h_true=None)
                 
                 all_csi_est.append((i, h_est_np.astype(np.complex64)))  # 🔧 FIX: Store with index
+                
+                # Store CSI quality in a temporary dict for later addition to meta
+                # (We'll add it to meta after the loop)
+                if not hasattr(estimate_csi_ls_smooth, '_csi_quality_dict'):
+                    estimate_csi_ls_smooth._csi_quality_dict = {}
+                estimate_csi_ls_smooth._csi_quality_dict[i] = csi_quality
             
             # compute delay (distance to emitter == attacked_sat_pos if attack else default user)
             if is_attack:
@@ -719,14 +897,44 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
             except Exception:
                 sample_f_d = 0.0
         
-        all_meta.append((i, {
+        # Phase 5: Add CSI quality metrics to meta
+        csi_quality = None
+        try:
+            from core.csi_estimation import estimate_csi_ls_smooth
+            if hasattr(estimate_csi_ls_smooth, '_csi_quality_dict'):
+                csi_quality = estimate_csi_ls_smooth._csi_quality_dict.get(i)
+        except:
+            pass
+        
+        meta_dict = {
             'doppler_hz': float(sample_f_d),
             'insider_mode': INSIDER_MODE if is_attack else 'benign',
             'power_preserving': bool(POWER_PRESERVING_COVERT),
             'power_before': float(power_before),
             'power_after': float(power_after),
             'power_diff_pct': float(power_diff_pct)
-        }))
+        }
+        
+        # Phase 5: Add CSI quality metrics
+        if csi_quality:
+            meta_dict['csi_nmse_db'] = csi_quality.get('nmse_db')
+            meta_dict['csi_variance'] = csi_quality.get('variance')
+            meta_dict['csi_quality'] = csi_quality.get('quality')
+            meta_dict['csi_mean_mag'] = csi_quality.get('mean_mag')
+            meta_dict['csi_std_mag'] = csi_quality.get('std_mag')
+        
+        # Phase 6: Add Scenario B metadata (if available)
+        if INSIDER_MODE == 'ground':
+            try:
+                from core.scenario_b_relay import amplify_and_forward_relay
+                if hasattr(amplify_and_forward_relay, '_scenario_b_meta_dict'):
+                    scenario_b_meta = amplify_and_forward_relay._scenario_b_meta_dict.get(i)
+                    if scenario_b_meta:
+                        meta_dict.update(scenario_b_meta)
+            except:
+                pass
+        
+        all_meta.append((i, meta_dict))
 
         if (idx + 1) % 100 == 0:
             print(f"  Generated {idx+1}/{total} samples")
@@ -750,6 +958,30 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
     all_tx_grids = [x[1] for x in sorted(all_tx_grids, key=lambda z: z[0])]  # 🔧 FIX: Sort tx_grids by index
     all_rx_grids = [x[1] for x in sorted(all_rx_grids, key=lambda z: z[0])]  # 🔧 FIX: Sort rx_grids by index
     all_csi_est = [x[1] for x in sorted(all_csi_est, key=lambda z: z[0])]  # 🔧 FIX: Sort csi_est by index
+    
+    # Phase 5: Clean up temporary CSI quality dict
+    try:
+        from core.csi_estimation import estimate_csi_ls_smooth
+        if hasattr(estimate_csi_ls_smooth, '_csi_quality_dict'):
+            del estimate_csi_ls_smooth._csi_quality_dict
+    except:
+        pass
+    
+    # Phase 6: Clean up temporary Scenario B metadata dict
+    try:
+        from core.scenario_b_relay import amplify_and_forward_relay
+        if hasattr(amplify_and_forward_relay, '_scenario_b_meta_dict'):
+            del amplify_and_forward_relay._scenario_b_meta_dict
+    except:
+        pass
+    
+    # Phase 5: Clean up temporary CSI quality dict
+    try:
+        from core.csi_estimation import estimate_csi_ls_smooth
+        if hasattr(estimate_csi_ls_smooth, '_csi_quality_dict'):
+            del estimate_csi_ls_smooth._csi_quality_dict
+    except:
+        pass
     all_meta = [x[1] for x in sorted(all_meta, key=lambda z: z[0])]
 
     print(f"✓ Dataset generation complete: {len(all_labels)} samples")

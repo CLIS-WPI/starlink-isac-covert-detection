@@ -25,6 +25,7 @@ Usage:
     detector.train(X_grids, y_labels, X_csi=csi_data)
 """
 
+import os
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -79,12 +80,15 @@ class CNNDetector:
         # 🔧 FIX: Store normalization statistics (computed only on train data)
         self.norm_mean_ofdm = None
         self.norm_std_ofdm = None
+        self.norm_max_ofdm = None  # For magnitude normalization of small signals (Scenario B)
         self.norm_mean_csi_real = None
         self.norm_std_csi_real = None
         self.norm_mean_csi_imag = None
         self.norm_std_csi_imag = None
         
-        # Set random seeds
+        # Set random seeds (Phase 0: reproducibility)
+        import random
+        random.seed(random_state)
         np.random.seed(random_state)
         tf.random.set_seed(random_state)
     
@@ -193,11 +197,11 @@ class CNNDetector:
         else:
             # Fallback to dense if not spatial
             x = layers.Flatten(name=f"{name_prefix}_flatten")(x)
-            x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
-                            name=f"{name_prefix}_dense1")(x)
-            x = layers.BatchNormalization(name=f"{name_prefix}_bn1")(x)
-            x = layers.Activation('relu', name=f"{name_prefix}_act1")(x)
-            x = layers.Dropout(self.dropout_rate, name=f"{name_prefix}_drop1")(x)
+        x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
+                        name=f"{name_prefix}_dense1")(x)
+        x = layers.BatchNormalization(name=f"{name_prefix}_bn_dense1")(x)  # 🔧 FIX: Unique name to avoid conflict
+        x = layers.Activation('relu', name=f"{name_prefix}_act_dense1")(x)  # 🔧 FIX: Unique name
+        x = layers.Dropout(self.dropout_rate, name=f"{name_prefix}_drop_dense1")(x)  # 🔧 FIX: Unique name
         
         # Final dense layer
         x = layers.Dense(32, kernel_regularizer=regularizers.l2(0.001),
@@ -224,10 +228,15 @@ class CNNDetector:
             ofdm_dim = ofdm_features.shape[-1]
             csi_dim = csi_features.shape[-1]
             
+            # 🔧 Phase 5: Quality-gated attention fusion
             # Compute attention scores (scalar per modality)
             # 🔧 FIX: Use unique names to avoid conflict with ofdm_encoder's attention layer
             ofdm_attn_score = layers.Dense(1, activation='sigmoid', name="fusion_ofdm_attention")(ofdm_features)
             csi_attn_score = layers.Dense(1, activation='sigmoid', name="fusion_csi_attention")(csi_features)
+            
+            # Phase 5: Quality gating - reduce CSI weight if quality is poor
+            # This is a simplified version; in practice, you'd pass CSI quality as input
+            # For now, we rely on attention mechanism to learn quality-aware weights
             
             # Normalize attention weights (softmax over modalities)
             attn_scores = layers.Concatenate(name="attn_concat")([ofdm_attn_score, csi_attn_score])
@@ -237,6 +246,9 @@ class CNNDetector:
             # Use Lambda layers for slicing
             ofdm_weight = layers.Lambda(lambda x: x[:, 0:1], name="ofdm_weight_slice")(attn_weights)
             csi_weight = layers.Lambda(lambda x: x[:, 1:2], name="csi_weight_slice")(attn_weights)
+            
+            # Phase 5: Optional quality-based gating (if CSI quality input is provided)
+            # For now, use attention weights as-is (attention should learn to gate poor CSI)
             
             # Scale features by attention weights
             ofdm_weighted = layers.Multiply(name="ofdm_weighted")([ofdm_features, ofdm_weight])
@@ -363,8 +375,22 @@ class CNNDetector:
             self.norm_mean_ofdm = mean_to_use
             self.norm_std_ofdm = std_to_use
         
-        if std_to_use > 0:
-            X_processed[..., 0] = (X_processed[..., 0] - mean_to_use) / std_to_use
+        # ✅ FIX: Handle very small signals (e.g., Scenario B with dual-hop)
+        # If signal is too small, use magnitude normalization instead of z-score
+        # This prevents numerical instability and preserves pattern
+        if mean_to_use < 0.01:  # Very small signal (e.g., Scenario B)
+            # Use magnitude normalization: scale to [0, 1] range
+            # Store max for consistent normalization across train/test
+            if not hasattr(self, 'norm_max_ofdm') or self.norm_max_ofdm is None:
+                self.norm_max_ofdm = np.max(X_processed[..., 0])
+            max_magnitude = self.norm_max_ofdm
+            if max_magnitude > 1e-6:  # Avoid division by zero
+                X_processed[..., 0] = X_processed[..., 0] / (max_magnitude + 1e-12)
+            # Note: mean and std are still stored for consistency, but not used for normalization
+        else:
+            # Standard z-score normalization for normal signals (e.g., Scenario A)
+            if std_to_use > 0:
+                X_processed[..., 0] = (X_processed[..., 0] - mean_to_use) / (std_to_use + 1e-12)
         
         if debug_mode:
             print(f"      After z-score: range [{np.min(X_processed[..., 0]):.6f}, {np.max(X_processed[..., 0]):.6f}]")
@@ -736,15 +762,50 @@ class CNNDetector:
         return metrics
     
     def save(self, filepath):
-        """Save model to file."""
+        """Save model to file along with normalization statistics."""
         if not self.is_trained:
             raise RuntimeError("Model not trained! Cannot save.")
         
+        # Save Keras model
         self.model.save(filepath)
+        
+        # Save normalization statistics to a separate file
+        norm_file = filepath.replace('.keras', '_norm.pkl')
+        norm_stats = {
+            'norm_mean_ofdm': self.norm_mean_ofdm,
+            'norm_std_ofdm': self.norm_std_ofdm,
+            'norm_max_ofdm': self.norm_max_ofdm,  # For magnitude normalization
+            'norm_mean_csi_real': self.norm_mean_csi_real,
+            'norm_std_csi_real': self.norm_std_csi_real,
+            'norm_mean_csi_imag': self.norm_mean_csi_imag,
+            'norm_std_csi_imag': self.norm_std_csi_imag
+        }
+        with open(norm_file, 'wb') as f:
+            pickle.dump(norm_stats, f)
+        
         print(f"✓ Model saved to {filepath}")
+        print(f"✓ Normalization statistics saved to {norm_file}")
     
     def load(self, filepath):
-        """Load model from file."""
+        """Load model from file along with normalization statistics."""
         self.model = keras.models.load_model(filepath)
         self.is_trained = True
+        
+        # Load normalization statistics if available
+        norm_file = filepath.replace('.keras', '_norm.pkl')
+        if os.path.exists(norm_file):
+            with open(norm_file, 'rb') as f:
+                norm_stats = pickle.load(f)
+            self.norm_mean_ofdm = norm_stats.get('norm_mean_ofdm')
+            self.norm_std_ofdm = norm_stats.get('norm_std_ofdm')
+            self.norm_max_ofdm = norm_stats.get('norm_max_ofdm')  # For magnitude normalization
+            self.norm_mean_csi_real = norm_stats.get('norm_mean_csi_real')
+            self.norm_std_csi_real = norm_stats.get('norm_std_csi_real')
+            self.norm_mean_csi_imag = norm_stats.get('norm_mean_csi_imag')
+            self.norm_std_csi_imag = norm_stats.get('norm_std_csi_imag')
+            print(f"✓ Normalization statistics loaded from {norm_file}")
+        else:
+            print(f"⚠️  Warning: Normalization statistics not found at {norm_file}")
+            print(f"   Model will compute normalization from test data (may cause data leakage)")
+        
         print(f"✓ Model loaded from {filepath}")

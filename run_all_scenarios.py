@@ -23,7 +23,11 @@ import sys
 import subprocess
 import argparse
 import shutil
+import pickle
+import numpy as np
+import pandas as pd
 from pathlib import Path
+from sklearn.model_selection import StratifiedKFold
 
 # Configuration
 from config.settings import (
@@ -31,8 +35,17 @@ from config.settings import (
     MODEL_DIR,
     RESULT_DIR,
     NUM_SAMPLES_PER_CLASS,
-    NUM_SATELLITES_FOR_TDOA
+    NUM_SATELLITES_FOR_TDOA,
+    GLOBAL_SEED,
+    N_FOLDS,
+    N_SEEDS
 )
+from utils.reproducibility import set_global_seeds, log_seed_info
+from model.detector_cnn import CNNDetector
+
+# 🔒 Phase 0: Set global seeds
+log_seed_info("run_all_scenarios.py")
+set_global_seeds(deterministic=True)
 
 
 def run_command(cmd, description, check=True):
@@ -166,6 +179,8 @@ def run_scenario(scenario_name, insider_mode, num_samples, num_satellites):
     print(f"   - Dataset: {scenario_dataset}")
     print(f"   - Results: {RESULT_DIR}/scenario_{scenario_name.lower()}/")
     print(f"   - Models: {MODEL_DIR}/scenario_{scenario_name.lower()}/")
+    
+    return scenario_dataset  # Return dataset path for CV
 
 
 def main():
@@ -180,6 +195,14 @@ Examples:
   python3 run_all_scenarios.py --skip-scenario-b
   python3 run_all_scenarios.py --num-samples 1500 --num-satellites 12
         """
+    )
+    
+    parser.add_argument(
+        '--scenario',
+        type=str,
+        choices=['sat', 'ground', 'both'],
+        default='both',
+        help='Scenario to run: "sat" (A), "ground" (B), or "both" (default: both)'
     )
     
     parser.add_argument(
@@ -199,16 +222,49 @@ Examples:
     parser.add_argument(
         '--skip-scenario-a',
         action='store_true',
-        help='Skip Scenario A (only run Scenario B)'
+        help='Skip Scenario A (only run Scenario B) - deprecated, use --scenario ground'
     )
     
     parser.add_argument(
         '--skip-scenario-b',
         action='store_true',
-        help='Skip Scenario B (only run Scenario A)'
+        help='Skip Scenario B (only run Scenario A) - deprecated, use --scenario sat'
+    )
+    
+    # Phase 4: Cross-validation options
+    parser.add_argument(
+        '--kfold',
+        type=int,
+        default=None,
+        help='Run K-fold cross-validation (default: None, skip CV)'
+    )
+    
+    parser.add_argument(
+        '--seeds',
+        type=int,
+        default=None,
+        help='Number of random seeds for CV (default: None, skip CV)'
+    )
+    
+    parser.add_argument(
+        '--cv-epochs',
+        type=int,
+        default=30,
+        help='Number of epochs per CV fold (default: 30)'
     )
     
     args = parser.parse_args()
+    
+    # Determine which scenarios to run
+    if args.scenario == 'both':
+        run_scenario_a = not args.skip_scenario_a
+        run_scenario_b = not args.skip_scenario_b
+    elif args.scenario == 'sat':
+        run_scenario_a = True
+        run_scenario_b = False
+    else:  # 'ground'
+        run_scenario_a = False
+        run_scenario_b = True
     
     # Ensure directories exist
     os.makedirs(DATASET_DIR, exist_ok=True)
@@ -219,22 +275,57 @@ Examples:
     print("🚀 AUTOMATED PIPELINE FOR SCENARIO A AND B")
     print("="*70)
     print(f"Configuration:")
+    print(f"  - Scenario: {args.scenario}")
     print(f"  - Samples per class: {args.num_samples}")
     print(f"  - Total samples: {args.num_samples * 2}")
     print(f"  - Number of satellites: {args.num_satellites}")
-    print(f"  - Skip Scenario A: {args.skip_scenario_a}")
-    print(f"  - Skip Scenario B: {args.skip_scenario_b}")
+    if args.kfold is not None and args.seeds is not None:
+        print(f"  - Cross-validation: {args.kfold}-fold, {args.seeds} seeds")
     print("="*70)
     
     # Run Scenario A
-    if not args.skip_scenario_a:
-        run_scenario('A', 'sat', args.num_samples, args.num_satellites)
+    dataset_a_path = None
+    if run_scenario_a:
+        dataset_a_path = run_scenario('A', 'sat', args.num_samples, args.num_satellites)
+        
+        # Phase 4: Run cross-validation if requested
+        if args.kfold is not None and args.seeds is not None:
+            print(f"\n{'='*70}")
+            print("🔧 PHASE 4: CROSS-VALIDATION FOR SCENARIO A")
+            print(f"{'='*70}")
+            cv_cmd = [
+                'python3', 'run_cross_validation.py',
+                '--scenario', 'sat',
+                '--kfold', str(args.kfold),
+                '--seeds', str(args.seeds),
+                '--epochs', str(args.cv_epochs)
+            ]
+            if dataset_a_path and os.path.exists(dataset_a_path):
+                cv_cmd.extend(['--dataset', dataset_a_path])
+            run_command(cv_cmd, f"Cross-validation for Scenario A", check=False)
     else:
         print("\n⏭️  Skipping Scenario A (--skip-scenario-a)")
     
     # Run Scenario B
-    if not args.skip_scenario_b:
-        run_scenario('B', 'ground', args.num_samples, args.num_satellites)
+    dataset_b_path = None
+    if run_scenario_b:
+        dataset_b_path = run_scenario('B', 'ground', args.num_samples, args.num_satellites)
+        
+        # Phase 4: Run cross-validation if requested
+        if args.kfold is not None and args.seeds is not None:
+            print(f"\n{'='*70}")
+            print("🔧 PHASE 4: CROSS-VALIDATION FOR SCENARIO B")
+            print(f"{'='*70}")
+            cv_cmd = [
+                'python3', 'run_cross_validation.py',
+                '--scenario', 'ground',
+                '--kfold', str(args.kfold),
+                '--seeds', str(args.seeds),
+                '--epochs', str(args.cv_epochs)
+            ]
+            if dataset_b_path and os.path.exists(dataset_b_path):
+                cv_cmd.extend(['--dataset', dataset_b_path])
+            run_command(cv_cmd, f"Cross-validation for Scenario B", check=False)
     else:
         print("\n⏭️  Skipping Scenario B (--skip-scenario-b)")
     
@@ -244,17 +335,26 @@ Examples:
     print(f"{'='*70}")
     print(f"\n📁 Output Files:")
     print(f"  Datasets:")
-    print(f"    - {DATASET_DIR}/dataset_scenario_a.pkl")
-    if not args.skip_scenario_b:
+    if run_scenario_a:
+        print(f"    - {DATASET_DIR}/dataset_scenario_a.pkl")
+    if run_scenario_b:
         print(f"    - {DATASET_DIR}/dataset_scenario_b.pkl")
     print(f"\n  Results:")
-    print(f"    - {RESULT_DIR}/scenario_a/")
-    if not args.skip_scenario_b:
+    if run_scenario_a:
+        print(f"    - {RESULT_DIR}/scenario_a/")
+    if run_scenario_b:
         print(f"    - {RESULT_DIR}/scenario_b/")
     print(f"\n  Models:")
-    print(f"    - {MODEL_DIR}/scenario_a/")
-    if not args.skip_scenario_b:
+    if run_scenario_a:
+        print(f"    - {MODEL_DIR}/scenario_a/")
+    if run_scenario_b:
         print(f"    - {MODEL_DIR}/scenario_b/")
+    if args.kfold is not None and args.seeds is not None:
+        print(f"\n  Cross-Validation Results:")
+        if run_scenario_a:
+            print(f"    - {RESULT_DIR}/cv_summary_scenario_a.csv")
+        if run_scenario_b:
+            print(f"    - {RESULT_DIR}/cv_summary_scenario_b.csv")
     print(f"\n{'='*70}")
 
 

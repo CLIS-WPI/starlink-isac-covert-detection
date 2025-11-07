@@ -11,14 +11,24 @@ import numpy as np
 # ======================================
 USE_NTN_IF_AVAILABLE = True
 GPU_INDEX = 0
-SEED = 42  # Random seed for reproducibility
+
+# ======================================
+# 🔒 Reproducibility & Evaluation Settings (Phase 0)
+# ======================================
+GLOBAL_SEED = 42  # Global random seed for reproducibility (used across all modules)
+SEED = GLOBAL_SEED  # Alias for backward compatibility
+N_FOLDS = 5  # Number of folds for cross-validation (if needed)
+N_SEEDS = 3  # Number of random seeds for robustness testing (if needed)
+
+# cuDNN determinism (for reproducible GPU operations)
+CUDA_DETERMINISTIC = True  # Set to True for reproducibility (may reduce performance)
 
 # ======================================
 # 📊 Dataset Parameters
 # ======================================
-NUM_SAMPLES_PER_CLASS = 500  # Reduced to 500 for faster testing (total: 1000 samples)
-                              # For paper: 1500+ samples
-                              # For testing: 500 samples is sufficient
+NUM_SAMPLES_PER_CLASS = 2000  # 10x larger dataset for robust training (total: 10000 samples)
+                               # For paper: 5000 samples per class
+                               # For testing: 500 samples is sufficient
 NUM_SATELLITES_FOR_TDOA = 12
 DATASET_DIR = "dataset"
 MODEL_DIR = "model"

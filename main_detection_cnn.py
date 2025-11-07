@@ -38,12 +38,18 @@ from config.settings import (
     DATASET_DIR,
     MODEL_DIR,
     RESULT_DIR,
-    SEED,
+    GLOBAL_SEED,
+    SEED,  # Alias for backward compatibility
     USE_SPECTROGRAM,
     USE_FOCAL_LOSS,
     FOCAL_LOSS_GAMMA,
     FOCAL_LOSS_ALPHA
 )
+
+# 🔒 Phase 0: Set global seeds for reproducibility
+from utils.reproducibility import set_global_seeds, log_seed_info
+log_seed_info("main_detection_cnn.py")
+set_global_seeds(deterministic=True)
 
 # CNN Detector
 from model.detector_cnn import CNNDetector
@@ -165,7 +171,7 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
             'num_satellites': NUM_SATELLITES_FOR_TDOA,
             'epochs': epochs,
             'batch_size': batch_size,
-            'seed': SEED
+            'seed': GLOBAL_SEED
         }
     }
     
@@ -174,22 +180,32 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print("[Phase 1] Loading pre-generated dataset...")
     print(f"{'='*70}")
     
-    # 🔧 FIX: Auto-detect dataset (support both old and new naming)
+    # 🔧 FIX: Select dataset based on INSIDER_MODE (not auto-detect)
+    # Import INSIDER_MODE to select correct dataset
+    from config.settings import INSIDER_MODE
+    
+    # Select scenario-specific dataset
+    scenario_name = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    
+    # 🔧 FIX: Always prefer latest dataset with scenario name (includes numbered versions)
     import glob
-    dataset_files = glob.glob(os.path.join(DATASET_DIR, "dataset_*.pkl"))
+    dataset_files = glob.glob(os.path.join(DATASET_DIR, f"dataset_{scenario_name}*.pkl"))
     if dataset_files:
-        # Prefer scenario-specific datasets
-        scenario_datasets = [f for f in dataset_files if 'scenario' in os.path.basename(f)]
-        if scenario_datasets:
-            dataset_path = sorted(scenario_datasets)[-1]  # Latest
-        else:
-            dataset_path = sorted(dataset_files)[-1]  # Latest
+        # Sort by modification time (newest first) or by name (highest number first)
+        dataset_files.sort(key=lambda x: (os.path.getmtime(x), os.path.basename(x)), reverse=True)
+        dataset_path = dataset_files[0]  # Latest/newest
+        print(f"  → Using latest dataset: {os.path.basename(dataset_path)}")
     else:
-        # Fallback to old naming
-        dataset_path = (
-            f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
-            f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
-        )
+        # Fallback to exact name
+        dataset_path = f"{DATASET_DIR}/dataset_{scenario_name}.pkl"
+        print(f"  → Using: {dataset_path}")
+        if not os.path.exists(dataset_path):
+            # Final fallback to old naming
+            dataset_path = (
+                f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
+                f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
+            )
+            print(f"  → Fallback: {dataset_path}")
     
     if not os.path.exists(dataset_path):
         print(f"❌ Dataset not found: {dataset_path}")
@@ -204,19 +220,19 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print(f"  → Benign: {np.sum(dataset['labels'] == 0)}")
     print(f"  → Attack: {np.sum(dataset['labels'] == 1)}")
     
-    # Extract data - 🔧 FIX: Use tx_grids for BOTH CNN-only and CNN+CSI
-    # Reason: rx_grids (post-channel) has weak pattern due to channel effects
-    # tx_grids (pre-channel) has strong pattern that CNN can learn
-    # CSI will still provide channel information for fusion
-    if 'tx_grids' in dataset:
-        # Use pre-channel for stronger pattern (both CNN-only and CNN+CSI)
-        X_grids = dataset['tx_grids']  # Pre-channel (clean pattern, easier to learn)
-        print(f"  ✓ Using PRE-CHANNEL tx_grids (stronger pattern for {'CNN+CSI' if use_csi else 'CNN-only'})")
-        print(f"  → Note: CSI will provide channel info, OFDM grid shows pre-channel pattern")
-    elif 'rx_grids' in dataset:
-        # Fallback to rx_grids if tx_grids not available
-        X_grids = dataset['rx_grids']  # Post-channel (weaker pattern)
-        print(f"  ⚠️ Using POST-CHANNEL rx_grids (fallback, pattern may be weak)")
+    # Extract data - ✅ REALISTIC: Use rx_grids (post-channel) for training
+    # Reason: In practice, detector only sees rx_grid (after channel distortion)
+    # Training on rx_grid makes the model realistic and generalizable
+    # This is the correct approach for real-world deployment
+    if 'rx_grids' in dataset:
+        # Use post-channel for realistic training (both CNN-only and CNN+CSI)
+        X_grids = dataset['rx_grids']  # Post-channel (realistic, what detector sees in practice)
+        print(f"  ✓ Using POST-CHANNEL rx_grids (realistic training for {'CNN+CSI' if use_csi else 'CNN-only'})")
+        print(f"  → Note: This matches real-world scenario where detector only sees post-channel signals")
+    elif 'tx_grids' in dataset:
+        # Fallback to tx_grids if rx_grids not available (should not happen in normal flow)
+        X_grids = dataset['tx_grids']  # Pre-channel (fallback only)
+        print(f"  ⚠️ Using PRE-CHANNEL tx_grids (fallback, not realistic for deployment)")
     else:
         X_grids = dataset.get('rx_grids', dataset.get('tx_grids'))
         print(f"  ⚠️ Using available grids")
@@ -319,6 +335,7 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print(f"{'='*70}")
     
     # Extract scenario info from meta
+    # Import INSIDER_MODE after potential update from --scenario argument
     from config.settings import INSIDER_MODE, POWER_PRESERVING_COVERT, COVERT_AMP
     scenario_info = {
         'insider_mode': INSIDER_MODE,
@@ -473,14 +490,14 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
             X_grids, X_csi, Y,
             test_size=test_size,
             stratify=Y,
-            random_state=SEED
+            random_state=GLOBAL_SEED
         )
     else:
         X_train, X_test, y_train, y_test = train_test_split(
             X_grids, Y,
             test_size=test_size,
             stratify=Y,
-            random_state=SEED
+            random_state=GLOBAL_SEED
         )
         X_csi_train, X_csi_test = None, None
     
@@ -500,7 +517,7 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
         use_csi=use_csi,
         learning_rate=0.001,
         dropout_rate=0.3,
-        random_state=SEED,
+        random_state=GLOBAL_SEED,
         use_focal_loss=USE_FOCAL_LOSS,
         focal_gamma=FOCAL_LOSS_GAMMA,
         focal_alpha=FOCAL_LOSS_ALPHA
@@ -513,14 +530,14 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
             X_train, X_csi_train, y_train,
             test_size=val_size,
             stratify=y_train,
-            random_state=SEED
+            random_state=GLOBAL_SEED
         )
     else:
         X_tr, X_val, y_tr, y_val = train_test_split(
             X_train, y_train,
             test_size=val_size,
             stratify=y_train,
-            random_state=SEED
+            random_state=GLOBAL_SEED
         )
         X_csi_tr, X_csi_val = None, None
     
@@ -675,8 +692,22 @@ if __name__ == "__main__":
                        help='Training batch size (default: 512 for H100)')
     parser.add_argument('--multi-gpu', action='store_true',
                        help='Use all available GPUs (MirroredStrategy)')
+    parser.add_argument('--scenario', type=str, choices=['sat', 'ground', 'a', 'b'],
+                       help='Scenario: "sat"/"a" (Scenario A) or "ground"/"b" (Scenario B). If not provided, uses INSIDER_MODE from settings.py')
     
     args = parser.parse_args()
+    
+    # Update INSIDER_MODE if scenario is provided
+    if args.scenario:
+        scenario_mode = 'sat' if args.scenario in ['sat', 'a'] else 'ground'
+        from run_all_scenarios import update_settings_file
+        update_settings_file('INSIDER_MODE', f"'{scenario_mode}'")
+        # Reload settings to get updated INSIDER_MODE
+        import importlib
+        from config import settings
+        importlib.reload(settings)
+        from config.settings import INSIDER_MODE
+        print(f"  ✓ Scenario set to: {scenario_mode} (INSIDER_MODE={INSIDER_MODE})")
     
     try:
         success, results = main(

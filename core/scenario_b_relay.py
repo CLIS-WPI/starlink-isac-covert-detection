@@ -8,19 +8,29 @@ import numpy as np
 import tensorflow as tf
 
 
-def amplify_and_forward_relay(y_ul, target_power=None, gain_limit_db=30.0):
+def amplify_and_forward_relay(y_ul, target_power=None, gain_limit_db=30.0, delay_samples=0, clip_range=(-2.0, 2.0)):
     """
-    Amplify-and-Forward relay with AGC (Automatic Gain Control).
+    Phase 6: Enhanced Amplify-and-Forward relay with AGC, delay, and clipping.
     
     Args:
-        y_ul: Received signal at relay (uplink)
+        y_ul: Received signal at relay (uplink) - time domain
         target_power: Target output power (if None, preserves input power)
         gain_limit_db: Maximum gain in dB (prevents excessive amplification)
+        delay_samples: Processing delay in samples (3-5 symbols typical)
+        clip_range: Tuple (min, max) for clipping to prevent saturation
     
     Returns:
         y_dl: Amplified signal for downlink transmission
         gain_applied: Applied gain (for logging)
+        delay_applied: Applied delay (for logging)
     """
+    # Phase 6: Add processing delay (simulate relay processing time)
+    if delay_samples > 0:
+        # Pad at the beginning and crop at the end
+        y_ul_padded = tf.pad(y_ul, [[0, 0], [delay_samples, 0]], mode='CONSTANT', constant_values=0.0)
+        # Crop to original length
+        y_ul = y_ul_padded[:, :tf.shape(y_ul)[1]]
+    
     # Compute input power
     input_power = tf.reduce_mean(tf.abs(y_ul)**2)
     input_power = tf.maximum(input_power, 1e-20)  # Prevent division by zero
@@ -31,16 +41,22 @@ def amplify_and_forward_relay(y_ul, target_power=None, gain_limit_db=30.0):
     
     # Compute required gain
     gain_linear = target_power / input_power
-    gain_db = 10.0 * tf.math.log(gain_linear + 1e-12) / tf.math.log(10.0)
     
-    # Limit gain to prevent excessive amplification
-    gain_limit_linear = 10.0**(gain_limit_db / 10.0)
-    gain_linear = tf.minimum(gain_linear, gain_limit_linear)
+    # Phase 6: Limit gain to prevent excessive amplification (0.5 to 2.0 range)
+    gain_min = 0.5
+    gain_max = 2.0
+    gain_linear = tf.clip_by_value(gain_linear, gain_min, gain_max)
     
     # Apply gain
     y_dl = y_ul * tf.cast(tf.sqrt(gain_linear), dtype=y_ul.dtype)
     
-    return y_dl, float(gain_linear.numpy())
+    # Phase 6: Clip to prevent saturation (optional but recommended)
+    if clip_range is not None:
+        y_dl_real = tf.clip_by_value(tf.math.real(y_dl), clip_range[0], clip_range[1])
+        y_dl_imag = tf.clip_by_value(tf.math.imag(y_dl), clip_range[0], clip_range[1])
+        y_dl = tf.complex(y_dl_real, y_dl_imag)
+    
+    return y_dl, float(gain_linear.numpy()), delay_samples
 
 
 def compute_doppler_ul(emitter_pos, emitter_vel, sat_pos, sat_vel, carrier_freq):

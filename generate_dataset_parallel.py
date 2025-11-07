@@ -16,6 +16,7 @@
 
 import os
 import sys
+import argparse
 
 # Disable GPU for main process (workers will set their own)
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -25,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pickle
 import numpy as np
 import time
+import pandas as pd
 
 
 def worker_gpu(gpu_id, worker_id, start_idx, end_idx, config, queue):
@@ -41,19 +43,23 @@ def worker_gpu(gpu_id, worker_id, start_idx, end_idx, config, queue):
     """
     # 🔧 FIX: Set random seeds for consistency (prevent GPU-specific randomness)
     import random
-    from config.settings import SEED
+    from config.settings import GLOBAL_SEED
+    from utils.reproducibility import set_worker_seed
+    
+    # 🔧 FIX: Disable determinism for Sionna compatibility
+    # Sionna requires from_non_deterministic_state() which conflicts with TF_DETERMINISTIC_OPS
+    os.environ.pop('TF_DETERMINISTIC_OPS', None)
+    os.environ.pop('TF_CUDNN_DETERMINISTIC', None)
     
     # Use deterministic seed per GPU+worker to ensure reproducibility
-    worker_seed = SEED + gpu_id * 1000 + worker_id * 100
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
+    worker_seed = set_worker_seed(GLOBAL_SEED, worker_id, gpu_id)
     
     # Set GPU for this worker
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
     # Import after setting GPU
     import tensorflow as tf
-    tf.random.set_seed(worker_seed)  # TensorFlow seed
+    # TensorFlow seed already set by set_worker_seed
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         tf.config.set_visible_devices(gpus[0], 'GPU')
@@ -109,6 +115,10 @@ def worker_gpu(gpu_id, worker_id, start_idx, end_idx, config, queue):
             # Only first worker (GPU0:W0) generates cache, others wait
             if gpu_id == 0 and worker_id == 0:
                 print(f"[GPU {gpu_id}:W{worker_id}] No cache found, generating topologies...")
+                # Ensure cache directory exists
+                cache_dir = os.path.dirname(cache_path)
+                if cache_dir and not os.path.exists(cache_dir):
+                    os.makedirs(cache_dir, exist_ok=True)
                 # Create lock file
                 try:
                     with open(cache_lock_path, 'w') as f:
@@ -143,16 +153,32 @@ def worker_gpu(gpu_id, worker_id, start_idx, end_idx, config, queue):
     num_samples = end_idx - start_idx
     print(f"\n[GPU {gpu_id}:W{worker_id}] Generating {num_samples} samples...")
     
-    dataset = generate_dataset_multi_satellite(
-        isac,
-        num_samples_per_class=num_samples // 2,
-        num_satellites=config['num_satellites'],
-        ebno_db_range=config['ebno_range'],
-        covert_rate_mbps_range=config['covert_rate_range'],
-        tle_path=config.get('tle_path'),
-        inject_attack_into_pathb=config.get('inject_attack_into_pathb', True),
-        covert_amp=config.get('covert_amp', 0.7)  # ✅ Use value from config (synchronized with settings.py)
-    )
+    # Phase 1: Check if config combinations are provided
+    phase1_configs = config.get('phase1_configs', None)
+    if phase1_configs:
+        # Phase 1 mode: Generate samples with diverse configurations
+        from core.dataset_generator_phase1 import generate_dataset_phase1
+        dataset = generate_dataset_phase1(
+            isac,
+            num_samples=num_samples,
+            num_satellites=config['num_satellites'],
+            phase1_configs=phase1_configs,
+            start_idx=start_idx,
+            tle_path=config.get('tle_path'),
+            inject_attack_into_pathb=config.get('inject_attack_into_pathb', True)
+        )
+    else:
+        # Legacy mode: Use original generation
+        dataset = generate_dataset_multi_satellite(
+            isac,
+            num_samples_per_class=num_samples // 2,
+            num_satellites=config['num_satellites'],
+            ebno_db_range=config['ebno_range'],
+            covert_rate_mbps_range=config['covert_rate_range'],
+            tle_path=config.get('tle_path'),
+            inject_attack_into_pathb=config.get('inject_attack_into_pathb', True),
+            covert_amp=config.get('covert_amp', 0.7)  # ✅ Use value from config (synchronized with settings.py)
+        )
 
     
     # Add metadata
@@ -282,17 +308,143 @@ def merge_datasets(datasets):
 
 
 
+def parse_phase1_args():
+    """Parse Phase 1 command-line arguments."""
+    parser = argparse.ArgumentParser(description="Phase 1: Large-scale dataset generation with parameter diversity")
+    
+    # Scenario
+    parser.add_argument('--scenario', type=str, choices=['sat', 'ground'], default=None,
+                       help="Scenario: 'sat' (downlink) or 'ground' (uplink-relay)")
+    
+    # Total samples
+    parser.add_argument('--total-samples', type=int, default=None,
+                       help="Total samples (default: NUM_SAMPLES_PER_CLASS * 2)")
+    
+    # Phase 1: Parameter diversity
+    parser.add_argument('--snr-list', type=str, default=None,
+                       help="Comma-separated SNR values in dB (e.g., '-5,0,5,10,15,20')")
+    parser.add_argument('--covert-amp-list', type=str, default=None,
+                       help="Comma-separated covert amplitudes (e.g., '0.1,0.3,0.5,0.7')")
+    parser.add_argument('--doppler-scale-list', type=str, default=None,
+                       help="Comma-separated Doppler scale factors (e.g., '0.5,1.0,1.5')")
+    parser.add_argument('--pattern', type=str, default=None,
+                       help="Comma-separated patterns: 'fixed' or 'random' (e.g., 'fixed,random')")
+    parser.add_argument('--subband', type=str, default=None,
+                       help="Comma-separated subband modes: 'mid' or 'random16' (e.g., 'mid,random16')")
+    parser.add_argument('--samples-per-config', type=int, default=None,
+                       help="Samples per configuration combination (default: auto-calculate)")
+    
+    # Output
+    parser.add_argument('--output-csv', type=str, default=None,
+                       help="Path to output metadata CSV (default: result/dataset_metadata_phase1.csv)")
+    
+    return parser.parse_args()
+
+
+def generate_config_combinations(args):
+    """
+    Generate all configuration combinations for Phase 1.
+    
+    Returns:
+        list: List of config dicts, each with snr_db, covert_amp, doppler_scale, pattern, subband_mode
+    """
+    from config.settings import COVERT_AMP, INSIDER_MODE
+    
+    # Parse lists
+    if args.snr_list:
+        snr_list = [float(x.strip()) for x in args.snr_list.split(',')]
+    else:
+        snr_list = [15.0, 20.0, 25.0]  # Default
+    
+    if args.covert_amp_list:
+        amp_list = [float(x.strip()) for x in args.covert_amp_list.split(',')]
+    else:
+        amp_list = [COVERT_AMP]  # Default
+    
+    if args.doppler_scale_list:
+        doppler_list = [float(x.strip()) for x in args.doppler_scale_list.split(',')]
+    else:
+        doppler_list = [1.0]  # Default
+    
+    if args.pattern:
+        pattern_list = [x.strip() for x in args.pattern.split(',')]
+    else:
+        pattern_list = ['fixed']  # Default
+    
+    if args.subband:
+        subband_list = [x.strip() for x in args.subband.split(',')]
+    else:
+        subband_list = ['mid']  # Default
+    
+    # Generate all combinations
+    configs = []
+    for snr in snr_list:
+        for amp in amp_list:
+            for doppler_scale in doppler_list:
+                for pattern in pattern_list:
+                    for subband in subband_list:
+                        configs.append({
+                            'snr_db': snr,
+                            'covert_amp': amp,
+                            'doppler_scale': doppler_scale,
+                            'pattern': pattern,
+                            'subband_mode': subband
+                        })
+    
+    return configs
+
+
 def main():
-    """Main parallel dataset generation with optimized multi-worker setup."""
+    """Main parallel dataset generation with Phase 1 enhancements."""
+    # Parse arguments
+    args = parse_phase1_args()
+    
     from config.settings import (
         NUM_SAMPLES_PER_CLASS,
         NUM_SATELLITES_FOR_TDOA,
         DATASET_DIR,
         USE_NTN_IF_AVAILABLE,
-        COVERT_AMP
+        COVERT_AMP,
+        INSIDER_MODE,
+        RESULT_DIR
     )
     
-    total_samples = NUM_SAMPLES_PER_CLASS * 2  # benign + attack
+    # Override scenario if provided
+    if args.scenario:
+        scenario_mode = args.scenario
+    else:
+        scenario_mode = INSIDER_MODE
+    
+    # Total samples
+    if args.total_samples:
+        total_samples = args.total_samples
+    else:
+        total_samples = NUM_SAMPLES_PER_CLASS * 2  # benign + attack
+    
+    # Phase 1: Generate configuration combinations
+    config_combinations = generate_config_combinations(args)
+    num_configs = len(config_combinations)
+    
+    # Calculate samples per config
+    if args.samples_per_config:
+        samples_per_config = args.samples_per_config
+    else:
+        samples_per_config = max(1, total_samples // (num_configs * 2))  # Divide by 2 for benign/attack
+    
+    actual_total = samples_per_config * num_configs * 2  # benign + attack
+    
+    print("="*70)
+    print("🚀 PHASE 1: LARGE-SCALE DATASET GENERATION WITH DIVERSITY")
+    print("="*70)
+    print(f"Scenario: {scenario_mode} ({'downlink' if scenario_mode == 'sat' else 'uplink-relay'})")
+    print(f"Total samples: {actual_total} (target: {total_samples})")
+    print(f"Configurations: {num_configs}")
+    print(f"Samples per config: {samples_per_config} (benign + attack = {samples_per_config * 2})")
+    print(f"SNR range: {[c['snr_db'] for c in config_combinations[:5]]}...")
+    print(f"Covert amp range: {[c['covert_amp'] for c in config_combinations[:5]]}...")
+    print(f"Patterns: {set(c['pattern'] for c in config_combinations)}")
+    print(f"Subbands: {set(c['subband_mode'] for c in config_combinations)}")
+    print("="*70)
     
     # 🔧 OPTIMIZATION: Determine optimal number of workers
     # Use more workers per GPU to better utilize CPU cores
@@ -315,7 +467,9 @@ def main():
         'covert_amp': COVERT_AMP,      # ✅ Use value from settings.py (e.g., 0.7)
         'tle_path': None,              # TLE disabled (detection-only mode)
         'inject_attack_into_pathb': True,  # Inject covert attack into Path-B for attacked satellite
-        'workers_per_gpu': workers_per_gpu  # 🔧 NEW: Pass worker count to workers
+        'workers_per_gpu': workers_per_gpu,  # 🔧 NEW: Pass worker count to workers
+        'phase1_configs': config_combinations if num_configs > 1 else None,  # Phase 1: Pass config combinations
+        'samples_per_config': samples_per_config if num_configs > 1 else None  # Phase 1: Samples per config
     }
     
     print("="*60)
@@ -375,16 +529,44 @@ def main():
     datasets = [r[2] for r in sorted(results, key=lambda x: (x[0], x[1]))]  # r[2] is dataset, r[0]=gpu_id, r[1]=worker_id
     merged_dataset = merge_datasets(datasets)
     
-    # Save
-    save_path = (
-        f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
-        f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
-    )
+    # Save dataset
+    if args.scenario:
+        scenario_name = 'scenario_a' if args.scenario == 'sat' else 'scenario_b'
+        if actual_total >= 10000:
+            save_path = f"{DATASET_DIR}/dataset_{scenario_name}_10k.pkl"
+        else:
+            save_path = f"{DATASET_DIR}/dataset_{scenario_name}_{actual_total}.pkl"
+    else:
+        save_path = (
+            f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
+            f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
+        )
     
     print(f"\n[Main] Saving dataset to {save_path}...")
     os.makedirs(DATASET_DIR, exist_ok=True)
     with open(save_path, 'wb') as f:
         pickle.dump(merged_dataset, f)
+    
+    # Phase 1: Export metadata CSV
+    if num_configs > 1 and 'meta' in merged_dataset and merged_dataset['meta']:
+        output_csv = args.output_csv or f"{RESULT_DIR}/dataset_metadata_phase1.csv"
+        os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+        
+        # Extract metadata for CSV
+        metadata_rows = []
+        for i, meta in enumerate(merged_dataset['meta']):
+            if isinstance(meta, dict):
+                row = {
+                    'sample_idx': i,
+                    'label': merged_dataset['labels'][i] if 'labels' in merged_dataset else None,
+                    **meta  # Include all meta fields
+                }
+                metadata_rows.append(row)
+        
+        if metadata_rows:
+            df_meta = pd.DataFrame(metadata_rows)
+            df_meta.to_csv(output_csv, index=False)
+            print(f"✅ Phase 1 metadata exported to: {output_csv}")
     
     total_time = time.time() - start_time
     
@@ -404,24 +586,8 @@ def main():
     except Exception as e:
         print(f"\n⚠️ Could not print detailed statistics: {e}")
     
-    # 🔧 NEW: Run consistency checker after merge
-    print("\n" + "="*60)
-    print("🔍 Running consistency checker...")
-    print("="*60)
-    try:
-        import subprocess
-        result = subprocess.run(
-            [sys.executable, 'check_dataset_consistency.py', '--dataset', save_path],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        print(result.stdout)
-        if result.stderr:
-            print("Warnings:", result.stderr)
-    except Exception as e:
-        print(f"⚠️ Consistency checker failed: {e}")
-        print("  → Run manually: python3 check_dataset_consistency.py")
+    # 🔧 NOTE: Consistency checker removed (file was deleted)
+    # If needed, use validate_dataset.py instead
 
 
 if __name__ == "__main__":

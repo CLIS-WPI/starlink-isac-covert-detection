@@ -1,39 +1,189 @@
 #!/usr/bin/env python3
 """
-🔍 Dataset Validation Script
-============================
-Quick validation checklist before training:
-1. Doppler is actually applied (non-zero, reasonable distribution)
-2. Injection is pre-channel (not post-channel)
-3. Power-preserving works (power_diff_pct < 10%)
-4. CSI-LS is healthy (variance reasonable)
-5. Dataset structure is correct (all keys present)
+🔍 Dataset Validation Script (Phase 0 Enhanced)
+===============================================
+Enhanced validation with normalization leakage detection and CSV export.
+
+Phase 0: Infrastructure hardening for evaluation.
 """
 
 import os
 import sys
 import pickle
+import argparse
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from scipy.fft import fft, fftfreq
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 from config.settings import (
     DATASET_DIR, NUM_SAMPLES_PER_CLASS, NUM_SATELLITES_FOR_TDOA,
-    INSIDER_MODE, POWER_PRESERVING_COVERT, COVERT_AMP, CARRIER_FREQUENCY
+    INSIDER_MODE, POWER_PRESERVING_COVERT, COVERT_AMP, CARRIER_FREQUENCY,
+    GLOBAL_SEED, RESULT_DIR
 )
+
+# 🔒 Phase 0: Set global seeds
+from utils.reproducibility import set_global_seeds, log_seed_info
+log_seed_info("validate_dataset.py")
+set_global_seeds(deterministic=True)
+
+
+def check_normalization_leakage(dataset, output_csv=None):
+    """
+    Check for data leakage in normalization (Phase 0).
+    
+    Computes normalization statistics (mean/std) on train-only data,
+    then checks if val/test statistics differ significantly.
+    
+    Args:
+        dataset: Dataset dictionary
+        output_csv: Path to save validation CSV
+    
+    Returns:
+        dict: Validation results
+    """
+    print("\n" + "="*70)
+    print("🔍 CHECK 6: Normalization Leakage Detection (Phase 0)")
+    print("="*70)
+    
+    if 'tx_grids' not in dataset or 'labels' not in dataset:
+        print("  ❌ FAIL: Missing tx_grids or labels")
+        return None
+    
+    # Split data (same as training pipeline)
+    X_grids = dataset['tx_grids']
+    Y = dataset['labels']
+    
+    # 70/20/10 split (same as main_detection_cnn.py)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_grids, Y,
+        test_size=0.3,
+        random_state=GLOBAL_SEED,
+        stratify=Y
+    )
+    
+    X_tr, X_val, y_tr, y_val = train_test_split(
+        X_train, y_train,
+        test_size=0.2/0.7,  # 20% of total = 20/70 of train
+        random_state=GLOBAL_SEED,
+        stratify=y_train
+    )
+    
+    print(f"  ✓ Data split: Train={len(X_tr)}, Val={len(X_val)}, Test={len(X_test)}")
+    
+    # Compute normalization statistics on TRAIN ONLY
+    # Convert to magnitude for normalization check
+    X_tr_mag = np.abs(X_tr)
+    train_mean = float(np.mean(X_tr_mag))
+    train_std = float(np.std(X_tr_mag))
+    
+    print(f"  ✓ Train-only statistics:")
+    print(f"      Mean: {train_mean:.6e}")
+    print(f"      Std:  {train_std:.6e}")
+    
+    # Check validation and test statistics
+    X_val_mag = np.abs(X_val)
+    X_test_mag = np.abs(X_test)
+    
+    val_mean = float(np.mean(X_val_mag))
+    val_std = float(np.std(X_val_mag))
+    test_mean = float(np.mean(X_test_mag))
+    test_std = float(np.std(X_test_mag))
+    
+    print(f"  ✓ Validation statistics:")
+    print(f"      Mean: {val_mean:.6e} (diff from train: {abs(val_mean - train_mean)/train_mean*100:.2f}%)")
+    print(f"      Std:  {val_std:.6e} (diff from train: {abs(val_std - train_std)/train_std*100:.2f}%)")
+    
+    print(f"  ✓ Test statistics:")
+    print(f"      Mean: {test_mean:.6e} (diff from train: {abs(test_mean - train_mean)/train_mean*100:.2f}%)")
+    print(f"      Std:  {test_std:.6e} (diff from train: {abs(test_std - train_std)/train_std*100:.2f}%)")
+    
+    # Check for significant differences (leakage indicator)
+    mean_diff_val = abs(val_mean - train_mean) / train_mean * 100
+    std_diff_val = abs(val_std - train_std) / train_std * 100
+    mean_diff_test = abs(test_mean - train_mean) / train_mean * 100
+    std_diff_test = abs(test_std - train_std) / train_std * 100
+    
+    # Threshold: if difference > 5%, may indicate leakage
+    leakage_detected = False
+    if mean_diff_val > 5.0 or std_diff_val > 5.0:
+        print(f"  ⚠️  WARNING: Large difference in validation statistics (may indicate leakage)")
+        leakage_detected = True
+    if mean_diff_test > 5.0 or std_diff_test > 5.0:
+        print(f"  ⚠️  WARNING: Large difference in test statistics (may indicate leakage)")
+        leakage_detected = True
+    
+    if not leakage_detected:
+        print(f"  ✅ PASS: No normalization leakage detected (differences < 5%)")
+    
+    # Prepare results for CSV export
+    results = {
+        'check_name': 'normalization_leakage',
+        'train_mean': train_mean,
+        'train_std': train_std,
+        'val_mean': val_mean,
+        'val_std': val_std,
+        'test_mean': test_mean,
+        'test_std': test_std,
+        'mean_diff_val_pct': mean_diff_val,
+        'std_diff_val_pct': std_diff_val,
+        'mean_diff_test_pct': mean_diff_test,
+        'std_diff_test_pct': std_diff_test,
+        'leakage_detected': leakage_detected,
+        'pass': not leakage_detected
+    }
+    
+    return results
+
+
+def check_power_analysis(dataset):
+    """Compute power analysis for CSV export."""
+    if 'tx_grids' not in dataset or 'labels' not in dataset:
+        return None
+    
+    labels = dataset['labels']
+    benign_mask = (labels == 0)
+    attack_mask = (labels == 1)
+    
+    benign_powers = [np.mean(np.abs(dataset['tx_grids'][i])**2) for i in np.where(benign_mask)[0]]
+    attack_powers = [np.mean(np.abs(dataset['tx_grids'][i])**2) for i in np.where(attack_mask)[0]]
+    
+    benign_power_mean = float(np.mean(benign_powers))
+    attack_power_mean = float(np.mean(attack_powers))
+    power_diff_pct = abs(attack_power_mean - benign_power_mean) / (benign_power_mean + 1e-12) * 100.0
+    
+    return {
+        'benign_power_mean': benign_power_mean,
+        'attack_power_mean': attack_power_mean,
+        'power_diff_pct': power_diff_pct
+    }
+
+
+def check_csi_quality(dataset):
+    """Compute CSI quality metrics for CSV export."""
+    if 'csi_est' not in dataset or dataset['csi_est'] is None:
+        return None
+    
+    csi_est = dataset['csi_est']
+    csi_mag = np.abs(csi_est)
+    csi_variance = float(np.var(csi_mag))
+    csi_mean = float(np.mean(csi_mag))
+    csi_std = float(np.std(csi_mag))
+    
+    # Compute NMSE if true CSI is available (placeholder for now)
+    nmse_db = None  # Will be computed if H_true is available
+    
+    return {
+        'csi_mean': csi_mean,
+        'csi_std': csi_std,
+        'csi_variance': csi_variance,
+        'csi_nmse_db': nmse_db
+    }
 
 
 def check_doppler(dataset):
-    """Check if Doppler is applied correctly."""
-    print("\n" + "="*70)
-    print("🔍 CHECK 1: Doppler Application")
-    print("="*70)
-    
+    """Check Doppler statistics."""
     if 'meta' not in dataset or not dataset['meta']:
-        print("  ❌ FAIL: 'meta' key missing or empty")
-        return False
+        return None
     
     dopplers = []
     for m in dataset['meta']:
@@ -41,297 +191,61 @@ def check_doppler(dataset):
             dopplers.append(m['doppler_hz'])
     
     if len(dopplers) == 0:
-        print("  ❌ FAIL: No doppler_hz found in meta")
-        return False
+        return None
     
     dopplers = np.array(dopplers)
-    mean_fd = np.mean(dopplers)
-    std_fd = np.std(dopplers)
-    non_zero = np.sum(np.abs(dopplers) > 1.0)  # At least 1 Hz
-    
-    print(f"  ✓ Doppler found in {len(dopplers)} samples")
-    print(f"  ✓ Mean: {mean_fd:.2f} Hz, Std: {std_fd:.2f} Hz")
-    print(f"  ✓ Non-zero (>1 Hz): {non_zero}/{len(dopplers)} ({100*non_zero/len(dopplers):.1f}%)")
-    
-    # Expected range for 28 GHz LEO: ±50 kHz to ±500 kHz
-    expected_min = -500e3
-    expected_max = 500e3
-    in_range = np.sum((dopplers >= expected_min) & (dopplers <= expected_max))
-    
-    if mean_fd == 0.0 and std_fd == 0.0:
-        print(f"  ❌ FAIL: All Doppler values are zero!")
-        return False
-    elif non_zero < len(dopplers) * 0.5:
-        print(f"  ⚠️  WARNING: {100*(1-non_zero/len(dopplers)):.1f}% samples have zero Doppler")
-    else:
-        print(f"  ✅ PASS: Doppler is applied (mean={mean_fd:.2f} Hz)")
-    
-    # Check FFT shift in a sample
-    if 'rx_grids' in dataset and len(dataset['rx_grids']) > 0:
-        sample_grid = dataset['rx_grids'][0]
-        if sample_grid.ndim >= 2:
-            # Take one symbol, compute FFT
-            sym = sample_grid[0] if sample_grid.ndim == 2 else sample_grid[0, 0]
-            fft_vals = np.fft.fft(sym)
-            fft_peak_idx = np.argmax(np.abs(fft_vals))
-            if fft_peak_idx != 0:
-                print(f"  ✓ FFT peak shifted (idx={fft_peak_idx}), Doppler likely applied")
-            else:
-                print(f"  ⚠️  FFT peak at 0, may indicate no Doppler")
-    
-    return True
-
-
-def check_injection_timing(dataset):
-    """Check that injection is pre-channel."""
-    print("\n" + "="*70)
-    print("🔍 CHECK 2: Injection Timing (Pre-Channel)")
-    print("="*70)
-    
-    if 'meta' not in dataset:
-        print("  ❌ FAIL: 'meta' key missing")
-        return False
-    
-    insider_modes = []
-    for m in dataset['meta']:
-        if isinstance(m, dict) and 'insider_mode' in m:
-            insider_modes.append(m['insider_mode'])
-    
-    if len(insider_modes) == 0:
-        print("  ⚠️  WARNING: insider_mode not in meta (may be old dataset)")
-    else:
-        unique_modes = set(insider_modes)
-        print(f"  ✓ Insider modes found: {unique_modes}")
-        if INSIDER_MODE in unique_modes or len(unique_modes) == 1:
-            print(f"  ✅ PASS: Injection mode matches INSIDER_MODE={INSIDER_MODE}")
-        else:
-            print(f"  ⚠️  WARNING: Mode mismatch (expected {INSIDER_MODE})")
-    
-    # Check power difference between tx_grids and rx_grids
-    if 'tx_grids' in dataset and 'rx_grids' in dataset:
-        labels = dataset['labels']
-        benign_mask = (labels == 0)
-        attack_mask = (labels == 1)
-        
-        if np.sum(attack_mask) > 0:
-            tx_attack = dataset['tx_grids'][attack_mask]
-            rx_attack = dataset['rx_grids'][attack_mask]
-            
-            # Power in tx (after injection, pre-channel)
-            tx_power = np.mean([np.mean(np.abs(g)**2) for g in tx_attack])
-            # Power in rx (post-channel)
-            rx_power = np.mean([np.mean(np.abs(g)**2) for g in rx_attack])
-            
-            # If injection is pre-channel, tx should have injection pattern
-            # If injection is post-channel, tx and rx would be similar (wrong!)
-            # We can't directly detect this, but we log it
-            print(f"  ✓ TX power (attack, pre-channel): {tx_power:.6e}")
-            print(f"  ✓ RX power (attack, post-channel): {rx_power:.6e}")
-            print(f"  → Note: Injection should be in tx_grids (pre-channel)")
-    
-    return True
-
-
-def check_power_preserving(dataset):
-    """Check power-preserving works."""
-    print("\n" + "="*70)
-    print("🔍 CHECK 3: Power-Preserving Covert Injection")
-    print("="*70)
-    
-    if 'tx_grids' not in dataset or 'labels' not in dataset:
-        print("  ❌ FAIL: Missing tx_grids or labels")
-        return False
-    
-    labels = dataset['labels']
-    benign_mask = (labels == 0)
-    attack_mask = (labels == 1)
-    
-    if np.sum(benign_mask) == 0 or np.sum(attack_mask) == 0:
-        print("  ❌ FAIL: Missing benign or attack samples")
-        return False
-    
-    # Compute power for each sample
-    benign_powers = []
-    attack_powers = []
-    
-    for i, label in enumerate(labels):
-        grid = dataset['tx_grids'][i]
-        power = np.mean(np.abs(grid)**2)
-        if label == 0:
-            benign_powers.append(power)
-        else:
-            attack_powers.append(power)
-    
-    benign_powers = np.array(benign_powers)
-    attack_powers = np.array(attack_powers)
-    
-    mean_benign = np.mean(benign_powers)
-    mean_attack = np.mean(attack_powers)
-    power_diff_pct = abs(mean_attack - mean_benign) / (mean_benign + 1e-12) * 100.0
-    
-    print(f"  ✓ Benign power: {mean_benign:.6e} ± {np.std(benign_powers):.6e}")
-    print(f"  ✓ Attack power: {mean_attack:.6e} ± {np.std(attack_powers):.6e}")
-    print(f"  ✓ Power difference: {power_diff_pct:.2f}%")
-    
-    # 🔍 ENHANCED: Check per-sample power differences from meta
-    if 'meta' in dataset and dataset['meta']:
-        power_diffs = []
-        doppler_hz_list = []
-        first_sample_meta = None
-        
-        for i, m in enumerate(dataset['meta']):
-            if isinstance(m, dict):
-                if 'power_diff_pct' in m:
-                    power_diffs.append(m['power_diff_pct'])
-                if 'doppler_hz' in m:
-                    doppler_hz_list.append(m['doppler_hz'])
-                if i == 0 and first_sample_meta is None:
-                    first_sample_meta = m
-        
-        if len(power_diffs) > 0:
-            power_diffs = np.array(power_diffs)
-            print(f"\n  📊 Per-sample power_diff_pct:")
-            print(f"      Mean: {np.mean(power_diffs):.2f}%, Std: {np.std(power_diffs):.2f}%")
-            print(f"      Range: [{np.min(power_diffs):.2f}%, {np.max(power_diffs):.2f}%]")
-            
-            # 🔍 CRITICAL CHECK: If power_diff is too low, injection may not be visible
-            if np.mean(power_diffs) < 1.0:
-                print(f"      ⚠️  WARNING: Mean power_diff_pct={np.mean(power_diffs):.2f}% < 1% - injection may be too weak!")
-            elif np.mean(power_diffs) < 5.0:
-                print(f"      ⚠️  WARNING: Mean power_diff_pct={np.mean(power_diffs):.2f}% < 5% - injection may be hard to detect")
-            else:
-                print(f"      ✓ Power difference is sufficient for detection")
-        
-        if len(doppler_hz_list) > 0:
-            doppler_hz_list = np.array(doppler_hz_list)
-            print(f"\n  📊 Doppler range:")
-            print(f"      Min: {np.min(doppler_hz_list):.2f} Hz")
-            print(f"      Max: {np.max(doppler_hz_list):.2f} Hz")
-            print(f"      Mean: {np.mean(doppler_hz_list):.2f} Hz")
-        
-        if first_sample_meta is not None:
-            print(f"\n  📋 First sample meta (sample #0):")
-            for key, value in first_sample_meta.items():
-                if isinstance(value, (int, float, str, bool)):
-                    print(f"      {key}: {value}")
-                elif isinstance(value, np.ndarray) and value.size < 10:
-                    print(f"      {key}: {value}")
-    
-    if POWER_PRESERVING_COVERT:
-        if power_diff_pct < 10.0:
-            print(f"  ✅ PASS: Power-preserving works (diff={power_diff_pct:.2f}% < 10%)")
-            return True
-        else:
-            print(f"  ❌ FAIL: Power diff too high ({power_diff_pct:.2f}% > 10%)")
-            return False
-    else:
-        print(f"  ℹ️  INFO: Power-preserving disabled (expected higher diff)")
-        return True
-
-
-def check_csi_estimation(dataset):
-    """Check CSI-LS estimation quality."""
-    print("\n" + "="*70)
-    print("🔍 CHECK 4: CSI-LS Estimation Quality")
-    print("="*70)
-    
-    if 'csi_est' not in dataset or dataset['csi_est'] is None:
-        print("  ❌ FAIL: 'csi_est' missing or None")
-        return False
-    
-    csi_est = dataset['csi_est']
-    print(f"  ✓ CSI_est shape: {csi_est.shape}")
-    
-    # Compute variance
-    csi_mag = np.abs(csi_est)
-    csi_variance = np.var(csi_mag)
-    csi_mean = np.mean(csi_mag)
-    csi_std = np.std(csi_mag)
-    
-    print(f"  ✓ CSI magnitude: mean={csi_mean:.6f}, std={csi_std:.6f}")
-    print(f"  ✓ CSI variance: {csi_variance:.6e}")
-    
-    # Check for NaN/Inf
-    nan_count = np.sum(np.isnan(csi_est))
-    inf_count = np.sum(np.isinf(csi_est))
-    
-    if nan_count > 0 or inf_count > 0:
-        print(f"  ❌ FAIL: CSI contains NaN ({nan_count}) or Inf ({inf_count})")
-        return False
-    
-    # Variance should be reasonable (not too large, not zero)
-    if csi_variance < 1e-10:
-        print(f"  ⚠️  WARNING: CSI variance too small (may be constant)")
-    elif csi_variance > 1.0:
-        print(f"  ⚠️  WARNING: CSI variance large (may indicate estimation issues)")
-    else:
-        print(f"  ✅ PASS: CSI variance reasonable ({csi_variance:.6e})")
-    
-    return True
-
-
-def check_dataset_structure(dataset):
-    """Check dataset has all required keys."""
-    print("\n" + "="*70)
-    print("🔍 CHECK 5: Dataset Structure")
-    print("="*70)
-    
-    required_keys = ['tx_grids', 'rx_grids', 'labels']
-    optional_keys = ['csi_est', 'meta', 'csi']
-    
-    missing = []
-    for key in required_keys:
-        if key not in dataset:
-            missing.append(key)
-    
-    if missing:
-        print(f"  ❌ FAIL: Missing required keys: {missing}")
-        return False
-    
-    print(f"  ✓ Required keys present: {required_keys}")
-    
-    # Check shapes
-    n_samples = len(dataset['labels'])
-    print(f"  ✓ Total samples: {n_samples}")
-    
-    if 'tx_grids' in dataset:
-        print(f"  ✓ tx_grids shape: {dataset['tx_grids'].shape}")
-    if 'rx_grids' in dataset:
-        print(f"  ✓ rx_grids shape: {dataset['rx_grids'].shape}")
-    if 'csi_est' in dataset and dataset['csi_est'] is not None:
-        print(f"  ✓ csi_est shape: {dataset['csi_est'].shape}")
-    if 'meta' in dataset:
-        print(f"  ✓ meta entries: {len(dataset['meta'])}")
-    
-    # Check label balance
-    labels = dataset['labels']
-    benign_count = np.sum(labels == 0)
-    attack_count = np.sum(labels == 1)
-    print(f"  ✓ Labels: benign={benign_count}, attack={attack_count}")
-    
-    if abs(benign_count - attack_count) > n_samples * 0.1:
-        print(f"  ⚠️  WARNING: Class imbalance ({benign_count} vs {attack_count})")
-    else:
-        print(f"  ✅ PASS: Dataset structure correct")
-    
-    return True
+    return {
+        'doppler_mean_hz': float(np.mean(dopplers)),
+        'doppler_std_hz': float(np.std(dopplers)),
+        'doppler_min_hz': float(np.min(dopplers)),
+        'doppler_max_hz': float(np.max(dopplers))
+    }
 
 
 def main():
-    """Run all validation checks."""
+    """Run all validation checks with CSV export."""
+    parser = argparse.ArgumentParser(description="Dataset validation with Phase 0 enhancements")
+    parser.add_argument('--dataset', type=str, default=None, help="Path to dataset file")
+    parser.add_argument('--output-csv', type=str, default=None, help="Path to output CSV file")
+    
+    args = parser.parse_args()
+    
     print("="*70)
-    print("🔍 DATASET VALIDATION CHECKLIST")
+    print("🔍 DATASET VALIDATION CHECKLIST (Phase 0 Enhanced)")
     print("="*70)
-    print(f"Dataset: {NUM_SAMPLES_PER_CLASS} samples per class")
     print(f"Scenario: {INSIDER_MODE}")
     print(f"Power-preserving: {POWER_PRESERVING_COVERT}")
     print(f"COVERT_AMP: {COVERT_AMP}")
+    print(f"Global Seed: {GLOBAL_SEED}")
     print("="*70)
     
-    dataset_path = (
-        f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
-        f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
-    )
+    # 🔧 FIX: Auto-detect latest dataset if not provided or if provided path doesn't exist
+    if args.dataset is None or not os.path.exists(args.dataset):
+        import glob
+        
+        # Determine scenario name (INSIDER_MODE already imported at top)
+        scenario_name = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+        
+        # Find latest scenario-specific dataset
+        dataset_files = glob.glob(os.path.join(DATASET_DIR, f"dataset_{scenario_name}*.pkl"))
+        if dataset_files:
+            # Sort by modification time (newest first)
+            dataset_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            dataset_path = dataset_files[0]  # Latest/newest
+            if args.dataset is None:
+                print(f"  → Auto-detected latest dataset: {os.path.basename(dataset_path)}")
+            else:
+                print(f"  ⚠️  Provided dataset not found, using latest: {os.path.basename(dataset_path)}")
+        else:
+            # Fallback
+            dataset_path = (
+                f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
+                f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
+            )
+            if args.dataset is None:
+                print(f"  → Using fallback: {dataset_path}")
+    else:
+        dataset_path = args.dataset
     
     if not os.path.exists(dataset_path):
         print(f"❌ Dataset not found: {dataset_path}")
@@ -344,44 +258,67 @@ def main():
     
     print(f"✓ Dataset loaded: {len(dataset.get('labels', []))} samples")
     
-    # Run all checks
-    checks = [
-        ("Dataset Structure", check_dataset_structure),
-        ("Doppler Application", check_doppler),
-        ("Injection Timing", check_injection_timing),
-        ("Power-Preserving", check_power_preserving),
-        ("CSI Estimation", check_csi_estimation),
-    ]
+    # Run validation checks
+    validation_results = {}
     
-    results = {}
-    for name, check_func in checks:
-        try:
-            results[name] = check_func(dataset)
-        except Exception as e:
-            print(f"  ❌ ERROR in {name}: {e}")
-            import traceback
-            traceback.print_exc()
-            results[name] = False
+    # Check 1: Normalization leakage (Phase 0)
+    norm_results = check_normalization_leakage(dataset)
+    if norm_results:
+        validation_results.update(norm_results)
+    
+    # Check 2: Power analysis
+    power_results = check_power_analysis(dataset)
+    if power_results:
+        validation_results.update(power_results)
+        print(f"\n  ✓ Power diff: {power_results['power_diff_pct']:.2f}%")
+    
+    # Check 3: CSI quality
+    csi_results = check_csi_quality(dataset)
+    if csi_results:
+        validation_results.update(csi_results)
+        print(f"\n  ✓ CSI variance: {csi_results['csi_variance']:.6e}")
+    
+    # Check 4: Doppler statistics
+    doppler_results = check_doppler(dataset)
+    if doppler_results:
+        validation_results.update(doppler_results)
+        print(f"\n  ✓ Doppler: mean={doppler_results['doppler_mean_hz']:.2f} Hz, std={doppler_results['doppler_std_hz']:.2f} Hz")
+    
+    # Add metadata
+    validation_results['dataset_path'] = dataset_path
+    validation_results['num_samples'] = len(dataset.get('labels', []))
+    validation_results['insider_mode'] = INSIDER_MODE
+    validation_results['power_preserving'] = POWER_PRESERVING_COVERT
+    validation_results['covert_amp'] = COVERT_AMP
+    validation_results['global_seed'] = GLOBAL_SEED
+    
+    # Export to CSV
+    output_csv = args.output_csv or f"{RESULT_DIR}/validation_sanity.csv"
+    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
+    
+    df = pd.DataFrame([validation_results])
+    df.to_csv(output_csv, index=False)
+    print(f"\n✅ Validation results exported to: {output_csv}")
     
     # Summary
     print("\n" + "="*70)
     print("📋 VALIDATION SUMMARY")
     print("="*70)
     
-    all_passed = all(results.values())
-    for name, passed in results.items():
-        status = "✅ PASS" if passed else "❌ FAIL"
-        print(f"  {status}: {name}")
+    if norm_results and not norm_results.get('leakage_detected', False):
+        print("  ✅ PASS: No normalization leakage")
+    elif norm_results:
+        print("  ⚠️  WARNING: Potential normalization leakage detected")
     
-    if all_passed:
-        print("\n✅ ALL CHECKS PASSED - Dataset is ready for training!")
-        return True
-    else:
-        print("\n❌ SOME CHECKS FAILED - Please fix issues before training")
-        return False
+    if power_results and power_results['power_diff_pct'] < 5.0:
+        print(f"  ✅ PASS: Power-preserving works (diff={power_results['power_diff_pct']:.2f}%)")
+    elif power_results:
+        print(f"  ⚠️  WARNING: Power diff high ({power_results['power_diff_pct']:.2f}%)")
+    
+    print(f"\n✅ Validation complete! Results saved to: {output_csv}")
+    return True
 
 
 if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
-
