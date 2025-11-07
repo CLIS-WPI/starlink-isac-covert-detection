@@ -150,31 +150,60 @@ class CNNDetector:
     
     def _build_csi_encoder(self, csi_shape, name_prefix="csi"):
         """
-        Build encoder for CSI (Channel State Information).
+        Build encoder for CSI (Channel State Information) with CNN branch.
         
-        Processes channel magnitude/phase patterns.
+        🔧 IMPROVED: Use small CNN blocks instead of raw dense layers.
+        This helps extract spatial/frequency patterns from CSI.
         """
         inputs = keras.Input(shape=csi_shape, name=f"{name_prefix}_input")
         
         x = inputs
         
-        # Expand dims if needed
+        # Expand dims if needed for CNN processing
         if len(csi_shape) == 1:  # Flatten CSI vector
-            x = layers.Reshape((csi_shape[0], 1))(x)
+            # Reshape to 2D for CNN: (features, 1)
+            x = layers.Reshape((csi_shape[0], 1, 1))(x)
+        elif len(csi_shape) == 2:  # (symbols, subcarriers) or (features, channels)
+            # Add channel dimension: (symbols, subcarriers, 1)
+            if csi_shape[-1] == 2:  # Already has real/imag channels
+                pass  # Keep as is
+            else:
+                x = layers.Reshape((*csi_shape, 1))(x)
+        elif len(csi_shape) == 3:  # (symbols, subcarriers, channels)
+            pass  # Already in correct format
         
-        # Dense processing for CSI
-        x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
-                        name=f"{name_prefix}_dense1")(x)
-        x = layers.BatchNormalization(name=f"{name_prefix}_bn1")(x)
-        x = layers.Activation('relu', name=f"{name_prefix}_act1")(x)
-        x = layers.Dropout(self.dropout_rate, name=f"{name_prefix}_drop1")(x)
+        # 🔧 IMPROVED: Small CNN blocks for spatial/frequency pattern extraction
+        # Conv Block 1: Extract local patterns
+        if len(x.shape) >= 4:  # Has spatial dimensions
+            x = layers.Conv2D(16, (3, 3), padding='same',
+                            kernel_regularizer=regularizers.l2(0.001),
+                            name=f"{name_prefix}_conv1")(x)
+            x = layers.BatchNormalization(name=f"{name_prefix}_bn1")(x)
+            x = layers.Activation('relu', name=f"{name_prefix}_act1")(x)
+            x = layers.MaxPooling2D((2, 2), name=f"{name_prefix}_pool1")(x)
+            x = layers.Dropout(self.dropout_rate, name=f"{name_prefix}_drop1")(x)
+            
+            # Conv Block 2: Deeper patterns
+            x = layers.Conv2D(32, (3, 3), padding='same',
+                            kernel_regularizer=regularizers.l2(0.001),
+                            name=f"{name_prefix}_conv2")(x)
+            x = layers.BatchNormalization(name=f"{name_prefix}_bn2")(x)
+            x = layers.Activation('relu', name=f"{name_prefix}_act2")(x)
+            x = layers.GlobalAveragePooling2D(name=f"{name_prefix}_gap")(x)
+        else:
+            # Fallback to dense if not spatial
+            x = layers.Flatten(name=f"{name_prefix}_flatten")(x)
+            x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
+                            name=f"{name_prefix}_dense1")(x)
+            x = layers.BatchNormalization(name=f"{name_prefix}_bn1")(x)
+            x = layers.Activation('relu', name=f"{name_prefix}_act1")(x)
+            x = layers.Dropout(self.dropout_rate, name=f"{name_prefix}_drop1")(x)
         
+        # Final dense layer
         x = layers.Dense(32, kernel_regularizer=regularizers.l2(0.001),
-                        name=f"{name_prefix}_dense2")(x)
-        x = layers.BatchNormalization(name=f"{name_prefix}_bn2")(x)
-        x = layers.Activation('relu', name=f"{name_prefix}_act2")(x)
-        
-        x = layers.Flatten(name=f"{name_prefix}_flatten")(x)
+                        name=f"{name_prefix}_dense_final")(x)
+        x = layers.BatchNormalization(name=f"{name_prefix}_bn_final")(x)
+        x = layers.Activation('relu', name=f"{name_prefix}_act_final")(x)
         
         return inputs, x
     
@@ -187,21 +216,53 @@ class CNNDetector:
             ofdm_input, ofdm_features = self._build_ofdm_encoder(ofdm_shape)
             csi_input, csi_features = self._build_csi_encoder(csi_shape)
             
-            # Fusion layer
-            combined = layers.Concatenate(name="fusion")([ofdm_features, csi_features])
+            # 🔧 IMPROVED: Attention-based fusion instead of raw concatenation
+            # Compute attention weights for feature fusion
+            # Attention mechanism: learn which features are more important
             
-            # Classification head
-            x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
+            # Get feature dimensions
+            ofdm_dim = ofdm_features.shape[-1]
+            csi_dim = csi_features.shape[-1]
+            
+            # Compute attention scores (scalar per modality)
+            # 🔧 FIX: Use unique names to avoid conflict with ofdm_encoder's attention layer
+            ofdm_attn_score = layers.Dense(1, activation='sigmoid', name="fusion_ofdm_attention")(ofdm_features)
+            csi_attn_score = layers.Dense(1, activation='sigmoid', name="fusion_csi_attention")(csi_features)
+            
+            # Normalize attention weights (softmax over modalities)
+            attn_scores = layers.Concatenate(name="attn_concat")([ofdm_attn_score, csi_attn_score])
+            attn_weights = layers.Softmax(name="attn_softmax")(attn_scores)
+            
+            # Apply attention weights (broadcast to feature dimensions)
+            # Use Lambda layers for slicing
+            ofdm_weight = layers.Lambda(lambda x: x[:, 0:1], name="ofdm_weight_slice")(attn_weights)
+            csi_weight = layers.Lambda(lambda x: x[:, 1:2], name="csi_weight_slice")(attn_weights)
+            
+            # Scale features by attention weights
+            ofdm_weighted = layers.Multiply(name="ofdm_weighted")([ofdm_features, ofdm_weight])
+            csi_weighted = layers.Multiply(name="csi_weighted")([csi_features, csi_weight])
+            
+            # Concatenate weighted features
+            combined = layers.Concatenate(name="fusion")([ofdm_weighted, csi_weighted])
+            
+            # Classification head with deeper layers
+            x = layers.Dense(128, kernel_regularizer=regularizers.l2(0.001),
                            name="fusion_dense1")(combined)
             x = layers.BatchNormalization(name="fusion_bn1")(x)
             x = layers.Activation('relu', name="fusion_act1")(x)
             x = layers.Dropout(self.dropout_rate, name="fusion_drop1")(x)
             
-            x = layers.Dense(32, kernel_regularizer=regularizers.l2(0.001),
+            x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
                            name="fusion_dense2")(x)
             x = layers.BatchNormalization(name="fusion_bn2")(x)
             x = layers.Activation('relu', name="fusion_act2")(x)
             x = layers.Dropout(self.dropout_rate, name="fusion_drop2")(x)
+            
+            x = layers.Dense(32, kernel_regularizer=regularizers.l2(0.001),
+                           name="fusion_dense3")(x)
+            x = layers.BatchNormalization(name="fusion_bn3")(x)
+            x = layers.Activation('relu', name="fusion_act3")(x)
+            x = layers.Dropout(self.dropout_rate, name="fusion_drop3")(x)
             
             outputs = layers.Dense(1, activation='sigmoid', name="output")(x)
             
@@ -579,24 +640,84 @@ class CNNDetector:
         
         return probs
     
-    def evaluate(self, X_test, y_test, X_csi_test=None):
+    def find_optimal_threshold(self, X_val, y_val, X_csi_val=None, metric='f1'):
         """
-        Evaluate detector performance.
+        Find optimal threshold using validation set.
+        
+        Args:
+            X_val: Validation OFDM grids
+            y_val: Validation labels
+            X_csi_val: Validation CSI data (optional)
+            metric: 'f1', 'youden', or 'balanced'
+        
+        Returns:
+            optimal_threshold: Best threshold value
+        """
+        probs = self.predict_proba(X_val, X_csi_val)
+        
+        if metric == 'youden':
+            # Youden's J statistic: maximize TPR - FPR
+            from sklearn.metrics import roc_curve
+            fpr, tpr, thresholds = roc_curve(y_val, probs)
+            j_scores = tpr - fpr
+            optimal_idx = np.argmax(j_scores)
+            optimal_threshold = thresholds[optimal_idx]
+        elif metric == 'f1':
+            # Maximize F1 score
+            from sklearn.metrics import f1_score
+            best_f1 = 0
+            optimal_threshold = 0.5
+            for threshold in np.arange(0.1, 0.9, 0.01):
+                preds = (probs >= threshold).astype(int)
+                f1 = f1_score(y_val, preds, zero_division=0)
+                if f1 > best_f1:
+                    best_f1 = f1
+                    optimal_threshold = threshold
+        else:  # 'balanced' or default
+            # Balanced accuracy
+            from sklearn.metrics import balanced_accuracy_score
+            best_bal_acc = 0
+            optimal_threshold = 0.5
+            for threshold in np.arange(0.1, 0.9, 0.01):
+                preds = (probs >= threshold).astype(int)
+                bal_acc = balanced_accuracy_score(y_val, preds)
+                if bal_acc > best_bal_acc:
+                    best_bal_acc = bal_acc
+                    optimal_threshold = threshold
+        
+        return optimal_threshold
+    
+    def evaluate(self, X_test, y_test, X_csi_test=None, threshold=None, X_val=None, y_val=None, X_csi_val=None):
+        """
+        Evaluate detector performance with optional threshold optimization.
         
         Args:
             X_test: Test OFDM grids
             y_test: Test labels
             X_csi_test: Test CSI data (optional, for fusion)
+            threshold: Decision threshold (if None, will optimize on val set if provided)
+            X_val: Validation OFDM grids (for threshold optimization)
+            y_val: Validation labels (for threshold optimization)
+            X_csi_val: Validation CSI data (optional, for threshold optimization)
         
         Returns:
-            metrics: Dictionary with AUC, precision, recall, F1
+            metrics: Dictionary with AUC, precision, recall, F1, threshold
         """
         if not self.is_trained:
             raise RuntimeError("Model not trained! Call train() first.")
         
         # Get predictions
         probs = self.predict_proba(X_test, X_csi_test)
-        preds = (probs >= 0.5).astype(int)
+        
+        # Optimize threshold if not provided and validation set available
+        if threshold is None and X_val is not None and y_val is not None:
+            print("  🔧 Optimizing threshold on validation set...")
+            threshold = self.find_optimal_threshold(X_val, y_val, X_csi_val, metric='f1')
+            print(f"  ✓ Optimal threshold: {threshold:.4f}")
+        elif threshold is None:
+            threshold = 0.5  # Default
+        
+        preds = (probs >= threshold).astype(int)
         
         # Calculate metrics
         auc = roc_auc_score(y_test, probs)
@@ -608,7 +729,8 @@ class CNNDetector:
             'auc': auc,
             'precision': precision,
             'recall': recall,
-            'f1': f1
+            'f1': f1,
+            'threshold': threshold
         }
         
         return metrics

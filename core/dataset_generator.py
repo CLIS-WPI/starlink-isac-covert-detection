@@ -397,9 +397,33 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
         sat_rx_list = []
         for sat_idx, (sat_pos, sat_vel) in enumerate(zip(base_positions[:num_satellites], base_velocities[:num_satellites])):
 
+            # 🔧 SCENARIO B: Two-channel relay (uplink → relay → downlink)
+            from config.settings import INSIDER_MODE
+            from core.scenario_b_relay import (
+                amplify_and_forward_relay,
+                compute_doppler_ul,
+                compute_doppler_dl
+            )
+            
             # select which tx_grid this satellite "sees" (use injected for attack else clean)
             tx_grid_used = tx_grid_injected if is_attack else tx_grid_clean
             tx_time_for_sat = isac_system.modulator(tx_grid_used)
+            
+            # 🔧 SCENARIO B: Uplink channel (ground → satellite)
+            if INSIDER_MODE == 'ground':
+                # Uplink: emitter → satellite
+                emitter_pos = attacked_sat_pos if is_attack else np.array([50e3, 50e3, 0.0])
+                emitter_vel = np.array([0.0, 0.0, 0.0])  # Ground is stationary
+                
+                # Compute UL Doppler
+                try:
+                    f_d_ul = compute_doppler_ul(
+                        emitter_pos, emitter_vel,
+                        sat_pos, sat_vel,
+                        isac_system.CARRIER_FREQUENCY
+                    )
+                except Exception:
+                    f_d_ul = 0.0
 
             # generate channel with topology if available (same as your original)
             if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
@@ -514,11 +538,51 @@ def generate_dataset_multi_satellite(isac_system, num_samples_per_class,
                 rx_grid_squeezed = tf.squeeze(y_grid_noisy, axis=[1, 2])
                 rx_grid_np = rx_grid_squeezed.numpy().astype(np.complex64)
                 all_rx_grids.append((i, rx_grid_np))  # 🔧 FIX: Store with index for proper alignment
-                # CSI LS estimate over all tones
-                tx_squeezed = tf.squeeze(tx_grid_used, axis=[1, 2])
-                denom = tf.where(tf.abs(tx_squeezed) > 1e-9, tx_squeezed, tf.complex(tf.ones_like(tx_squeezed, tf.float32)*1e-9, tf.zeros_like(tx_squeezed, tf.float32)))
-                h_est = rx_grid_squeezed / denom
-                all_csi_est.append((i, h_est.numpy().astype(np.complex64)))  # 🔧 FIX: Store with index
+                # 🔧 IMPROVED: CSI LS estimate from PILOTS only, then interpolate
+                tx_squeezed = tf.squeeze(tx_grid_used, axis=[1, 2])  # (symbols, subcarriers)
+                rx_squeezed = rx_grid_squeezed  # (symbols, subcarriers)
+                
+                # Get pilot positions from resource grid
+                # Kronecker pattern: pilots at symbols [2, 7] on all subcarriers
+                pilot_symbols = [2, 7]  # From isac_system.rg config
+                num_symbols, num_subcarriers = rx_squeezed.shape[0], rx_squeezed.shape[1]
+                
+                # Estimate CSI at pilot symbols only
+                h_est_pilots = []
+                pilot_positions = []
+                for sym_idx in pilot_symbols:
+                    if sym_idx < num_symbols:
+                        for sc_idx in range(num_subcarriers):
+                            tx_pilot = tx_squeezed[sym_idx, sc_idx]
+                            rx_pilot = rx_squeezed[sym_idx, sc_idx]
+                            if tf.abs(tx_pilot) > 1e-9:
+                                h_pilot = rx_pilot / tx_pilot
+                                h_est_pilots.append(h_pilot.numpy())
+                                pilot_positions.append((sym_idx, sc_idx))
+                
+                # Interpolate: for each symbol, use average of pilot symbols
+                # For subcarriers, use nearest neighbor or average
+                h_est_np = np.zeros((num_symbols, num_subcarriers), dtype=np.complex64)
+                
+                if len(h_est_pilots) > 0:
+                    h_est_pilots = np.array(h_est_pilots)
+                    pilot_positions = np.array(pilot_positions)
+                    
+                    # For each tone, find nearest pilot
+                    for sym_idx in range(num_symbols):
+                        for sc_idx in range(num_subcarriers):
+                            # Find nearest pilot
+                            distances = np.abs(pilot_positions[:, 0] - sym_idx) + np.abs(pilot_positions[:, 1] - sc_idx)
+                            nearest_idx = np.argmin(distances)
+                            h_est_np[sym_idx, sc_idx] = h_est_pilots[nearest_idx]
+                else:
+                    # Fallback: simple division (original method)
+                    tx_np = tx_squeezed.numpy()
+                    rx_np = rx_squeezed.numpy()
+                    denom = np.where(np.abs(tx_np) > 1e-9, tx_np, 1e-9)
+                    h_est_np = rx_np / denom
+                
+                all_csi_est.append((i, h_est_np.astype(np.complex64)))  # 🔧 FIX: Store with index
             
             # compute delay (distance to emitter == attacked_sat_pos if attack else default user)
             if is_attack:

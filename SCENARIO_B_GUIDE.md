@@ -1,17 +1,17 @@
-# Scenario B — Insider@Ground (Uplink → Relay → Downlink) — راهنمای اجرا
+# Scenario B — Insider@Ground (Uplink → Relay → Downlink) — Execution Guide
 
-## 📋 پیش‌نیازها
+## 📋 Prerequisites
 
-✅ مطمئن شوید که `INSIDER_MODE = 'ground'` در `config/settings.py` است.
+✅ Ensure that `INSIDER_MODE = 'ground'` in `config/settings.py`.
 
 ```python
 # config/settings.py
-INSIDER_MODE = 'ground'  # ✅ برای Scenario B
+INSIDER_MODE = 'ground'  # ✅ For Scenario B
 ```
 
-## 🔄 تفاوت با Scenario A
+## 🔄 Differences from Scenario A
 
-| ویژگی | Scenario A (Satellite) | Scenario B (Ground) |
+| Feature | Scenario A (Satellite) | Scenario B (Ground) |
 |--------|------------------------|---------------------|
 | **Injection Point** | Satellite downlink | Ground terminal uplink |
 | **Signal Path** | Direct downlink | Uplink → Relay → Downlink |
@@ -20,9 +20,9 @@ INSIDER_MODE = 'ground'  # ✅ برای Scenario B
 | **Expected AUC** | ~1.0 (CNN-only) | ~0.85-0.95 (CNN-only) |
 | | ~0.96 (CNN+CSI) | ~0.90+ (CNN+CSI) |
 
-## 🚀 دستورات اجرا
+## 🚀 Execution Commands
 
-### مرحله 1: ساخت دیتاست
+### Step 1: Generate Dataset
 
 ```bash
 python3 generate_dataset_parallel.py \
@@ -30,47 +30,47 @@ python3 generate_dataset_parallel.py \
   --num-satellites 12
 ```
 
-**توضیح:**
-- `--num-samples 500`: 500 نمونه per class = 1000 نمونه کل
-- `--num-satellites 12`: 12 ماهواره برای TDoA
-- دیتاست در `dataset/dataset_samples500_sats12.pkl` ذخیره می‌شود
-- ⚠️ **نکته:** اگر دیتاست Scenario A را می‌خواهید نگه دارید، ابتدا rename کنید:
+**Explanation:**
+- `--num-samples 500`: 500 samples per class = 1000 total samples
+- `--num-satellites 12`: 12 satellites for TDoA
+- Dataset saved to `dataset/dataset_samples500_sats12.pkl`
+- ⚠️ **Note:** If you want to keep Scenario A dataset, rename it first:
 
 ```bash
-# نگه داشتن دیتاست Scenario A
+# Keep Scenario A dataset
 mv dataset/dataset_samples500_sats12.pkl dataset/dataset_scenario_a.pkl
 
-# بعد از ساخت دیتاست Scenario B
+# After generating Scenario B dataset
 mv dataset/dataset_samples500_sats12.pkl dataset/dataset_scenario_b.pkl
 ```
 
-**زمان تقریبی:** ~10-15 دقیقه (بسته به GPU)
+**Approximate time:** ~10-15 minutes (depending on GPU)
 
 ---
 
-### مرحله 2: بررسی صحت دیتاست (اختیاری اما توصیه می‌شود)
+### Step 2: Validate Dataset (Optional but Recommended)
 
 ```bash
-# بررسی کلی دیتاست
+# General dataset validation
 python3 validate_dataset.py
 
-# چک صحت تزریق (pre-channel, power_diff_pct, pattern_boost, doppler_hz)
+# Check injection correctness (pre-channel, power_diff_pct, pattern_boost, doppler_hz)
 python3 verify_injection_correctness.py
 
-# چک consistency (برای multi-GPU)
+# Check consistency (for multi-GPU)
 python3 check_dataset_consistency.py
 ```
 
-**انتظار:**
+**Expected:**
 - ✅ Power diff < 5%
-- ✅ Pattern boost در subcarriers 24-39
-- ✅ Doppler non-zero و reasonable
+- ✅ Pattern boost in subcarriers 24-39
+- ✅ Doppler non-zero and reasonable
 - ✅ Labels: 50/50 split
 - ✅ Insider mode: 'ground'
 
 ---
 
-### مرحله 3: Train CNN-only
+### Step 3: Train CNN-only
 
 ```bash
 python3 main_detection_cnn.py \
@@ -78,17 +78,17 @@ python3 main_detection_cnn.py \
   --batch-size 512
 ```
 
-**توضیح:**
-- `--epochs 50`: حداکثر 50 epochs (با early stopping)
-- `--batch-size 512`: بهینه برای H100 GPU
-- نتایج در `result/scenario_b/detection_results_cnn.json`
-- مدل در `model/scenario_b/cnn_detector.keras`
+**Explanation:**
+- `--epochs 50`: Maximum 50 epochs (with early stopping)
+- `--batch-size 512`: Optimized for H100 GPU
+- Results in `result/scenario_b/detection_results_cnn.json`
+- Model in `model/scenario_b/cnn_detector.keras`
 
-**زمان تقریبی:** ~2-3 دقیقه
+**Approximate time:** ~2-3 minutes
 
 ---
 
-### مرحله 4: Train CNN+CSI
+### Step 4: Train CNN+CSI
 
 ```bash
 python3 main_detection_cnn.py \
@@ -97,43 +97,43 @@ python3 main_detection_cnn.py \
   --batch-size 512
 ```
 
-**توضیح:**
-- `--use-csi`: فعال‌سازی CSI fusion (real/imag channels)
-- نتایج در `result/scenario_b/detection_results_cnn_csi.json`
-- مدل در `model/scenario_b/cnn_detector_csi.keras`
+**Explanation:**
+- `--use-csi`: Enable CSI fusion (real/imag channels)
+- Results in `result/scenario_b/detection_results_cnn_csi.json`
+- Model in `model/scenario_b/cnn_detector_csi.keras`
 
-**زمان تقریبی:** ~3-5 دقیقه
+**Approximate time:** ~3-5 minutes
 
 ---
 
-### مرحله 5: بررسی نتایج
+### Step 5: Review Results
 
 ```bash
-# مشاهده نتایج CNN-only
+# View CNN-only results
 cat result/scenario_b/detection_results_cnn.json | jq '.metrics'
 
-# مشاهده نتایج CNN+CSI
+# View CNN+CSI results
 cat result/scenario_b/detection_results_cnn_csi.json | jq '.metrics'
 
-# مشاهده meta log (per-sample metadata)
+# View meta log (per-sample metadata)
 head result/scenario_b/run_meta_log.csv
 head result/scenario_b/run_meta_log_csi.csv
 ```
 
 ---
 
-## 📊 نتایج مورد انتظار
+## 📊 Expected Results
 
-بر اساس تفاوت‌های Scenario B با A:
+Based on differences between Scenario B and A:
 
 ### CNN-only:
-- **AUC:** ~0.85-0.95 (پایین‌تر از Scenario A به‌دلیل رله)
+- **AUC:** ~0.85-0.95 (lower than Scenario A due to relay)
 - **Precision:** ~0.70-0.90
 - **Recall:** ~0.30-0.50
 - **F1 Score:** ~0.40-0.60
 
 ### CNN+CSI:
-- **AUC:** ~0.90+ ✅ (هدف: ≥ 0.90)
+- **AUC:** ~0.90+ ✅ (target: ≥ 0.90)
 - **Precision:** ~0.60-0.80
 - **Recall:** ~0.90-0.99
 - **F1 Score:** ~0.70-0.85
@@ -141,32 +141,32 @@ head result/scenario_b/run_meta_log_csi.csv
 ### Physical Metrics:
 - **Power diff:** < 5% (ultra-covert) ✅
 - **Doppler:** Similar to Scenario A
-- **CSI variance:** ممکن است کمی بالاتر باشد (به‌دلیل رله)
+- **CSI variance:** May be slightly higher (due to relay)
 
 ---
 
-## 📁 ساختار فایل‌های خروجی
+## 📁 Output File Structure
 
 ```
 result/scenario_b/
-├── detection_results_cnn.json      # نتایج CNN-only
-├── detection_results_cnn_csi.json   # نتایج CNN+CSI
+├── detection_results_cnn.json      # CNN-only results
+├── detection_results_cnn_csi.json   # CNN+CSI results
 ├── run_meta_log.csv                 # Meta log CNN-only
 └── run_meta_log_csi.csv             # Meta log CNN+CSI
 
 model/scenario_b/
-├── cnn_detector.keras               # مدل CNN-only
-└── cnn_detector_csi.keras           # مدل CNN+CSI
+├── cnn_detector.keras               # CNN-only model
+└── cnn_detector_csi.keras           # CNN+CSI model
 ```
 
 ---
 
-## 🔄 مقایسه با Scenario A
+## 🔄 Comparison with Scenario A
 
-پس از اجرای Scenario B، می‌توانید نتایج را مقایسه کنید:
+After executing Scenario B, you can compare results:
 
 ```bash
-# مقایسه AUC
+# Compare AUC
 echo "Scenario A - CNN-only:"
 cat result/scenario_a/detection_results_cnn.json | jq '.metrics.auc'
 echo "Scenario B - CNN-only:"
@@ -180,34 +180,33 @@ cat result/scenario_b/detection_results_cnn_csi.json | jq '.metrics.auc'
 
 ---
 
-## ⚠️ نکات مهم
+## ⚠️ Important Notes
 
-1. **Normalization:** mean/std فقط از train data محاسبه می‌شود (no data leakage) ✅
+1. **Normalization:** mean/std computed only from train data (no data leakage) ✅
 2. **Injection Location:** Subcarriers 24-39 (middle band) ✅
 3. **Power Preserving:** `POWER_PRESERVING_COVERT = True` ✅
 4. **CSI:** Real/imag channels (dual-channel) ✅
-5. **Relay Effect:** Amplify-and-Forward (نویز مضاعف) ⚠️
+5. **Relay Effect:** Amplify-and-Forward (double noise) ⚠️
 
 ---
 
-## 🐛 عیب‌یابی
+## 🐛 Troubleshooting
 
-اگر AUC پایین بود (< 0.85):
+If AUC is low (< 0.85):
 
-1. چک کنید که `INSIDER_MODE = 'ground'` است
-2. چک کنید که `COVERT_AMP = 0.5` است
-3. چک کنید که `POWER_PRESERVING_COVERT = True` است
-4. دیتاست را دوباره بسازید
-5. `verify_injection_correctness.py` را اجرا کنید
-6. توجه: Scenario B به‌طور طبیعی AUC پایین‌تری دارد (به‌دلیل رله)
+1. Check that `INSIDER_MODE = 'ground'`
+2. Check that `COVERT_AMP = 0.5`
+3. Check that `POWER_PRESERVING_COVERT = True`
+4. Rebuild the dataset
+5. Run `verify_injection_correctness.py`
+6. Note: Scenario B naturally has lower AUC (due to relay)
 
 ---
 
-## ✅ آماده برای مقاله
+## ✅ Ready for Paper
 
-پس از اجرای موفق:
-- ✅ نتایج در `result/scenario_b/` ذخیره شده
-- ✅ مدل‌ها در `model/scenario_b/` ذخیره شده
-- ✅ کاملاً جدا از Scenario A
-- ✅ آماده برای مقایسه و استفاده در مقاله
-
+After successful execution:
+- ✅ Results stored in `result/scenario_b/`
+- ✅ Models stored in `model/scenario_b/`
+- ✅ Completely separate from Scenario A
+- ✅ Ready for comparison and use in paper

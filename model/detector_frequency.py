@@ -49,10 +49,10 @@ class FrequencyDetector:
             mask_weight: Weight for focus mask features (default: 10.0)
         """
         self.model = RandomForestClassifier(
-            n_estimators=100,      # برای تست سریع و جلوگیری از زمان‌های طولانی
+            n_estimators=100,      # For fast testing and to avoid long training times
             max_depth=12,
             min_samples_split=5,
-            min_samples_leaf=2,    # اجازه میدیم در دیتاست کوچک الگوهای ریزتر یاد گرفته بشن
+            min_samples_leaf=2,    # Allow finer patterns to be learned in small datasets
             max_features='sqrt',
             random_state=random_state,
             n_jobs=n_jobs,
@@ -89,9 +89,9 @@ class FrequencyDetector:
 
         mask = np.zeros((n_sym, n_sc), dtype=np.float32)
         
-        # تزریق در subcarriers [0..31] و symbols [1..7]
-        # محور عمودی (symbol) = 1 تا 7
-        # محور افقی (subcarrier) = 0 تا 31
+        # Injection in subcarriers [0..31] and symbols [1..7]
+        # Vertical axis (symbol) = 1 to 7
+        # Horizontal axis (subcarrier) = 0 to 31
         mask[1:8, 0:32] = 1.0
         
         return mask
@@ -235,11 +235,11 @@ class FrequencyDetector:
         if fit:
             # 🔧 CRITICAL FIX: Use GLOBAL normalization (no axis parameter)
             self.norm_params = {
-                'mean': features.mean(),  # 👈 مطمئن شوید axis=0 حذف شده
-                'std': features.std()      # 👈 مطمئن شوید axis=0 حذف شده
+                'mean': features.mean(),  # Ensure axis=0 is removed
+                'std': features.std()      # Ensure axis=0 is removed
             }
             
-            # 🔍 DEBUG مورد 6: چک normalization params
+            # DEBUG case 6: Check normalization params
             if verbose:
                 print(f"  🔍 DEBUG scaler fitted:")
                 print(f"      mean = {self.norm_params['mean']:.6f}")
@@ -294,7 +294,7 @@ class FrequencyDetector:
         if verbose:
             print(f"  Training AUC: {auc_train:.4f}")
             
-            # 🔍 DEBUG مورد 10: Feature importance
+            # DEBUG case 10: Feature importance
             importances = self.model.feature_importances_
             top_10_idx = np.argsort(importances)[-10:]
             print(f"  🔍 DEBUG Top-10 RF feature importances:")

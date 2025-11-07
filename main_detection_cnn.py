@@ -174,10 +174,22 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print("[Phase 1] Loading pre-generated dataset...")
     print(f"{'='*70}")
     
-    dataset_path = (
-        f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
-        f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
-    )
+    # 🔧 FIX: Auto-detect dataset (support both old and new naming)
+    import glob
+    dataset_files = glob.glob(os.path.join(DATASET_DIR, "dataset_*.pkl"))
+    if dataset_files:
+        # Prefer scenario-specific datasets
+        scenario_datasets = [f for f in dataset_files if 'scenario' in os.path.basename(f)]
+        if scenario_datasets:
+            dataset_path = sorted(scenario_datasets)[-1]  # Latest
+        else:
+            dataset_path = sorted(dataset_files)[-1]  # Latest
+    else:
+        # Fallback to old naming
+        dataset_path = (
+            f"{DATASET_DIR}/dataset_samples{NUM_SAMPLES_PER_CLASS}_"
+            f"sats{NUM_SATELLITES_FOR_TDOA}.pkl"
+        )
     
     if not os.path.exists(dataset_path):
         print(f"❌ Dataset not found: {dataset_path}")
@@ -531,7 +543,11 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print("[Phase 5] Evaluating on test set...")
     print(f"{'='*70}")
     
-    metrics = detector.evaluate(X_test, y_test, X_csi_test=X_csi_test)
+    # 🔧 IMPROVED: Use threshold optimization on validation set
+    metrics = detector.evaluate(
+        X_test, y_test, X_csi_test=X_csi_test,
+        X_val=X_val, y_val=y_val, X_csi_val=X_csi_val
+    )
 
     # Additional physical reporting (already in results from Phase 2)
     if results.get('doppler_stats'):
