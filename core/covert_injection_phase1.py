@@ -41,6 +41,7 @@ def inject_covert_channel_fixed_phase1(ofdm_np, resource_grid,
     n_syms = num_symbols
     
     # ===== Select Subcarriers =====
+    # 🔧 IMPROVEMENT: Support hopping and sparse patterns
     if selected_subcarriers is None:
         if subband_mode == 'mid':
             # Middle band: subcarriers 24-39 (16 subcarriers)
@@ -50,13 +51,19 @@ def inject_covert_channel_fixed_phase1(ofdm_np, resource_grid,
             max_start = max(0, n_subs - 16)
             start_idx = np.random.randint(0, max_start + 1)
             selected_subcarriers = np.arange(start_idx, min(start_idx + 16, n_subs))
+        elif subband_mode == 'hopping':
+            # Frequency hopping: different subcarriers per symbol
+            # For now, return None to indicate per-symbol selection needed
+            selected_subcarriers = None  # Will be handled per-symbol
+        elif subband_mode == 'sparse':
+            # Sparse: random non-contiguous subcarriers
+            num_sparse = min(16, n_subs)
+            selected_subcarriers = np.sort(np.random.choice(n_subs, num_sparse, replace=False))
         else:
             # Default: middle band
             selected_subcarriers = np.arange(24, min(40, n_subs))
     else:
         selected_subcarriers = np.array(selected_subcarriers)
-    
-    num_covert_subs = len(selected_subcarriers)
     
     # ===== Select Symbols =====
     if selected_symbols is None:
@@ -76,6 +83,26 @@ def inject_covert_channel_fixed_phase1(ofdm_np, resource_grid,
     
     num_covert_syms = len(selected_symbols)
     
+    # ===== Handle Hopping Pattern =====
+    # 🔧 IMPROVEMENT: Handle hopping pattern (different subcarriers per symbol)
+    all_selected_subcarriers = set()
+    if subband_mode == 'hopping' and selected_subcarriers is None:
+        # Frequency hopping: select different subcarriers for each symbol
+        band_width = 16
+        max_start = max(0, n_subs - band_width)
+        selected_subcarriers_per_symbol = []
+        for s_idx, s in enumerate(selected_symbols):
+            # Random start for this symbol
+            start_idx = np.random.randint(0, max_start + 1)
+            scs_for_symbol = np.arange(start_idx, min(start_idx + band_width, n_subs))
+            selected_subcarriers_per_symbol.append(scs_for_symbol)
+            all_selected_subcarriers.update(scs_for_symbol)
+        selected_subcarriers = np.array(sorted(all_selected_subcarriers))
+        num_covert_subs = band_width  # Use band_width for symbol generation
+    else:
+        selected_subcarriers_per_symbol = [selected_subcarriers] * len(selected_symbols)
+        num_covert_subs = len(selected_subcarriers) if selected_subcarriers is not None else 16
+    
     # ===== Generate Covert Symbols =====
     # Generate random QPSK symbols for covert channel
     covert_bits = np.random.randint(0, 2, size=(num_covert_syms, num_covert_subs, 2))
@@ -92,9 +119,21 @@ def inject_covert_channel_fixed_phase1(ofdm_np, resource_grid,
     
     # Phase-aligned additive injection (maximizes magnitude boost)
     for s_idx, s in enumerate(selected_symbols):
-        for sc_idx, sc in enumerate(selected_subcarriers):
+        scs_for_this_symbol = selected_subcarriers_per_symbol[s_idx]
+        for sc_idx, sc in enumerate(scs_for_this_symbol):
+            # Find index in selected_subcarriers for covert_symbols
+            if sc in selected_subcarriers:
+                sc_idx_in_selected = np.where(selected_subcarriers == sc)[0][0]
+                if sc_idx_in_selected < len(covert_symbols[s_idx]):
+                    covert = covert_symbols[s_idx, sc_idx_in_selected]
+                else:
+                    # For hopping, generate new symbol if needed
+                    covert = np.random.choice([1+1j, -1+1j, 1-1j, -1-1j]) * covert_amp
+            else:
+                # For hopping, generate new symbol
+                covert = np.random.choice([1+1j, -1+1j, 1-1j, -1-1j]) * covert_amp
+            
             original = ofdm_np[0, 0, 0, s, sc]
-            covert = covert_symbols[s_idx, sc_idx]
             
             # Phase-aligned additive injection
             orig_phase = np.angle(original)
@@ -121,9 +160,10 @@ def inject_covert_channel_fixed_phase1(ofdm_np, resource_grid,
     injection_info = {
         'pattern': pattern,
         'subband_mode': subband_mode,
-        'selected_subcarriers': selected_subcarriers.tolist(),
+        'selected_subcarriers': selected_subcarriers.tolist() if selected_subcarriers is not None else [],
         'selected_symbols': selected_symbols.tolist(),
-        'num_covert_subs': num_covert_subs,
+        'selected_subcarriers_per_symbol': [scs.tolist() for scs in selected_subcarriers_per_symbol] if subband_mode == 'hopping' else None,
+        'num_covert_subs': len(selected_subcarriers) if selected_subcarriers is not None else num_covert_subs,
         'num_covert_syms': num_covert_syms,
         'covert_amp': covert_amp,
         'power_preserving': power_preserving,

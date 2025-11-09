@@ -134,7 +134,9 @@ def compute_spectrogram(grids):
     return spectrograms
 
 
-def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
+def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False, scenario_name=None):
+    # Store scenario_name for later use in saving
+    _scenario_name = scenario_name
     """
     Main CNN detection pipeline.
     
@@ -180,12 +182,13 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print("[Phase 1] Loading pre-generated dataset...")
     print(f"{'='*70}")
     
-    # 🔧 FIX: Select dataset based on INSIDER_MODE (not auto-detect)
-    # Import INSIDER_MODE to select correct dataset
-    from config.settings import INSIDER_MODE
-    
-    # Select scenario-specific dataset
-    scenario_name = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    # 🔧 FIX: Select dataset based on scenario_name or INSIDER_MODE
+    if scenario_name is None:
+        from config.settings import INSIDER_MODE
+        scenario_name = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    else:
+        # scenario_name is provided, use it directly
+        pass
     
     # 🔧 FIX: Always prefer latest dataset with scenario name (includes numbered versions)
     import glob
@@ -225,7 +228,7 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     # Reason: In practice, detector only sees rx_grid (after channel distortion)
     # Training on rx_grid makes the model realistic and generalizable
     # This is the correct approach for real-world deployment
-    USE_PRE_CHANNEL_FOR_TEST = False  # 🔧 TEST 10: Set to False for production (was True for testing)
+    USE_PRE_CHANNEL_FOR_TEST = False  # 🔧 Set to False for production (use rx_grids)
     
     if USE_PRE_CHANNEL_FOR_TEST and 'tx_grids' in dataset:
         # 🔧 TEST 10: Use pre-channel for testing (to diagnose channel problem)
@@ -675,8 +678,12 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print("[Phase 6] Saving model...")
     print(f"{'='*70}")
     
-    # 🔧 FIX: Organize models by scenario
-    scenario_folder = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    # 🔧 FIX: Organize models by scenario (use scenario_name if provided, else INSIDER_MODE)
+    if _scenario_name is None:
+        from config.settings import INSIDER_MODE
+        scenario_folder = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    else:
+        scenario_folder = _scenario_name
     scenario_model_dir = f"{MODEL_DIR}/{scenario_folder}"
     os.makedirs(scenario_model_dir, exist_ok=True)
     
@@ -687,8 +694,12 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     results['model_path'] = model_path
     
     # ===== Save Results =====
-    # 🔧 FIX: Organize results by scenario (scenario_a for 'sat', scenario_b for 'ground')
-    scenario_folder = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    # 🔧 FIX: Organize results by scenario (use scenario_name if provided, else INSIDER_MODE)
+    if _scenario_name is None:
+        from config.settings import INSIDER_MODE
+        scenario_folder = 'scenario_a' if INSIDER_MODE == 'sat' else 'scenario_b'
+    else:
+        scenario_folder = _scenario_name
     scenario_result_dir = f"{RESULT_DIR}/{scenario_folder}"
     os.makedirs(scenario_result_dir, exist_ok=True)
     
@@ -774,24 +785,20 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Update INSIDER_MODE if scenario is provided
+    # Determine scenario_name from argument
+    scenario_name = None
     if args.scenario:
         scenario_mode = 'sat' if args.scenario in ['sat', 'a'] else 'ground'
-        from run_all_scenarios import update_settings_file
-        update_settings_file('INSIDER_MODE', f"'{scenario_mode}'")
-        # Reload settings to get updated INSIDER_MODE
-        import importlib
-        from config import settings
-        importlib.reload(settings)
-        from config.settings import INSIDER_MODE
-        print(f"  ✓ Scenario set to: {scenario_mode} (INSIDER_MODE={INSIDER_MODE})")
+        scenario_name = 'scenario_a' if scenario_mode == 'sat' else 'scenario_b'
+        print(f"  ✓ Scenario: {scenario_mode} → dataset: {scenario_name}")
     
     try:
         success, results = main(
             use_csi=args.use_csi,
             epochs=args.epochs,
             batch_size=args.batch_size,
-            multi_gpu=args.multi_gpu
+            multi_gpu=args.multi_gpu,
+            scenario_name=scenario_name
         )
         
         if success:

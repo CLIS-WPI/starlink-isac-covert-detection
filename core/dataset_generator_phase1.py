@@ -659,6 +659,10 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
                         if h_true_dl.shape != (num_symbols, num_subcarriers):
                             h_true_dl = None  # Skip if shape mismatch
             
+            # 🔧 IMPROVEMENT: Add injection_info to metadata for adaptive band emphasis
+            if injection_info is not None:
+                csi_metadata['injection_info'] = injection_info
+            
             # Estimate CSI using enhanced LMMSE 2D separable
             if CSI_ESTIMATION == 'LMMSE':
                 h_est_np, csi_info = estimate_csi_lmmse_2d_separable(
@@ -696,12 +700,18 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
             # 🔧 CRITICAL FIX: Pass noise_variance from CSI estimation (more accurate than SNR input)
             snr_for_eq = scenario_b_meta.get('snr_dl', snr_db) if scenario_b_meta else snr_db
             noise_var_from_csi = csi_info.get('noise_variance', None)  # From LMMSE estimation
+            # 🔧 IMPROVEMENT: Pass metadata (with injection_info) to mmse_equalize
+            eq_metadata = csi_metadata.copy() if 'csi_metadata' in locals() else {}
+            if injection_info is not None:
+                eq_metadata['injection_info'] = injection_info
+            
             rx_grid_eq, eq_info = mmse_equalize(
                 rx_grid_np, h_est_np,
                 snr_db=snr_for_eq,  # Use downlink SNR for dual-hop, main SNR for single-hop
                 alpha_reg=None,  # Auto-compute based on SNR
                 blend_factor=None,  # Auto-compute based on SNR
-                noise_variance_est=noise_var_from_csi  # 🔧 CRITICAL: Use noise variance from CSI estimation
+                noise_variance_est=noise_var_from_csi,  # 🔧 CRITICAL: Use noise variance from CSI estimation
+                metadata=eq_metadata  # 🔧 IMPROVEMENT: Pass injection_info for adaptive band emphasis
             )
             
             # 🔧 FIX: Trust MMSE's own blend policy - don't override it
@@ -729,9 +739,20 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
             # Monitor pattern preservation (for all samples - needed for acceptance criteria)
             preservation_eq = None
             try:
+                # 🔧 IMPROVEMENT: Get target_subcarriers from injection_info (support random/hopping patterns)
+                target_subcarriers = np.arange(24, 40)  # Default
+                if injection_info is not None and 'selected_subcarriers' in injection_info:
+                    target_subcarriers = np.array(injection_info['selected_subcarriers'], dtype=int)
+                    # Ensure valid range
+                    target_subcarriers = target_subcarriers[
+                        (target_subcarriers >= 0) & (target_subcarriers < tx_grid_np.shape[1])
+                    ]
+                    if len(target_subcarriers) == 0:
+                        target_subcarriers = np.arange(24, 40)  # Fallback
+                
                 preservation_metrics = compute_pattern_preservation(
                     tx_grid_np, rx_grid_np, rx_grid_eq,
-                    target_subcarriers=np.arange(24, 40)
+                    target_subcarriers=target_subcarriers
                 )
                 preservation_eq = preservation_metrics.get('preservation_eq')
                 
@@ -782,6 +803,9 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
             scenario_b_meta['eq_pattern_preservation'] = preservation_eq  # 🔧 FIX: Store preservation for acceptance check
             # 🔧 A4: Store CSI failure flag
             scenario_b_meta['flag_csi_fail'] = eq_info.get('flag_csi_fail', 0)
+            # 🔧 NEW: Store pattern indices source (critical for diagnosis)
+            scenario_b_meta['pattern_indices_source'] = eq_info.get('pattern_indices_source', 'unknown')
+            scenario_b_meta['target_subcarriers_count'] = eq_info.get('target_subcarriers_count', 0)
         else:
             # Scenario A: Use simple LS estimation (no equalization needed)
             h_est_np = np.zeros((num_symbols, num_subcarriers), dtype=np.complex64)
@@ -793,8 +817,13 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
                         if tf.abs(tx_pilot) > 1e-9:
                             h_est_np[sym_idx, sc_idx] = (rx_pilot / tx_pilot).numpy()
         
+        # 🔧 CRITICAL: Store equalized grid (rx_grid_np is already equalized for Scenario B)
+        # For Scenario B: rx_grid_np = rx_grid_eq (equalized)
+        # For Scenario A: rx_grid_np = rx_grid (no equalization needed)
         all_rx_grids.append((start_idx + sample_idx, rx_grid_np))
-        all_csi_est.append((start_idx + sample_idx, h_est_np))
+        # 🔧 FIX: Convert CSI to complex64 to save space (from complex128)
+        h_est_np_complex64 = h_est_np.astype(np.complex64)
+        all_csi_est.append((start_idx + sample_idx, h_est_np_complex64))
         
         # Store label
         all_labels.append((start_idx + sample_idx, 1 if is_attack else 0))

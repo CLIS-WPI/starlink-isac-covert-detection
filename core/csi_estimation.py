@@ -231,7 +231,7 @@ def compute_csi_quality_metrics(h_est, h_true=None):
     return metrics
 
 
-def mmse_equalize(rx_grid, h_est, snr_db=20.0, alpha_reg=None, blend_factor=None, noise_variance_est=None):
+def mmse_equalize(rx_grid, h_est, snr_db=20.0, alpha_reg=None, blend_factor=None, noise_variance_est=None, metadata=None):
     """
     MMSE Equalization for OFDM signal.
     
@@ -539,10 +539,21 @@ def mmse_equalize(rx_grid, h_est, snr_db=20.0, alpha_reg=None, blend_factor=None
     
     # 🔧 B4: Band emphasis (optional, for ablation testing)
     # 🔧 MICRO-TUNE 2: Stronger band emphasis with power normalization
-    # Apply stronger boost on target band (24-39) and reduction outside, then normalize power
+    # 🔧 IMPROVEMENT: Get target_subcarriers from injection_info (support random/hopping patterns)
     apply_band_emphasis = True  # ✅ ENABLED: Improves pattern preservation
     if apply_band_emphasis:
-        target_subcarriers = np.arange(24, 40)  # Target band
+        # Get target_subcarriers from metadata (injection_info) if available
+        target_subcarriers = np.arange(24, 40)  # Default: fixed band
+        if metadata is not None:
+            injection_info = metadata.get('injection_info', {})
+            if 'selected_subcarriers' in injection_info:
+                target_subcarriers = np.array(injection_info['selected_subcarriers'], dtype=int)
+                # Ensure valid range
+                target_subcarriers = target_subcarriers[
+                    (target_subcarriers >= 0) & (target_subcarriers < rx_grid.shape[1])
+                ]
+                if len(target_subcarriers) == 0:
+                    target_subcarriers = np.arange(24, 40)  # Fallback to default
         boost_factor = 1.05  # 5% boost on target band (optimal balance)
         reduce_factor = 0.98  # 2% reduction outside
         
@@ -589,16 +600,32 @@ def mmse_equalize(rx_grid, h_est, snr_db=20.0, alpha_reg=None, blend_factor=None
     signal_power_raw_debug = float(signal_power_raw)
     noise_power_constant_debug = float(noise_power_constant)
     
+    # 🔧 CRITICAL: Get target_subcarriers from injection_info (not hardcoded)
+    target_subcarriers_for_logging = None
+    pattern_indices_source = 'hardcoded'
+    if metadata is not None:
+        injection_info = metadata.get('injection_info', {})
+        if 'selected_subcarriers' in injection_info:
+            target_subcarriers_for_logging = np.array(injection_info['selected_subcarriers'], dtype=int)
+            pattern_indices_source = 'injection_info'
+        elif 'selected_subcarriers_per_symbol' in injection_info and injection_info['selected_subcarriers_per_symbol'] is not None:
+            # For hopping patterns, use union of all subcarriers
+            all_scs = set()
+            for scs_list in injection_info['selected_subcarriers_per_symbol']:
+                all_scs.update(scs_list)
+            target_subcarriers_for_logging = np.array(sorted(all_scs), dtype=int)
+            pattern_indices_source = 'injection_info_hopping'
+    
     eq_info = {
         'alpha_used': float(alpha_reg),
         'snr_input_db': float(snr_db),
-        'snr_raw_db': float(snr_raw_db),  # 🔧 FINAL CHECK: Pre-EQ SNR (BEFORE normalization/blending)
+        'snr_raw_db': float(snr_raw_db),  # 🔧 CRITICAL: Pre-EQ SNR (BEFORE normalization/blending)
         'snr_eq_db': float(snr_eq_db),
-        'snr_improvement_db': float(snr_improvement_db),  # 🔧 FINAL CHECK: SNR gain
+        'snr_improvement_db': float(snr_improvement_db),  # 🔧 CRITICAL: SNR gain
         'blend_factor': float(blend_factor),
         'eq_filter_power': float(eq_filter_power),
-        'alpha_is_per_subcarrier': False,  # 🔧 FINAL CHECK: Currently global α
-        'alpha_units': 'power',  # 🔧 FINAL CHECK: α in power units (noise_variance)
+        'alpha_is_per_subcarrier': False,  # Currently global α
+        'alpha_units': 'power',  # α in power units (noise_variance)
         # 🔧 DEBUG: Additional metadata for diagnosis
         'h_power_mean': h_power_mean,  # Mean |Ĥ|² (with floor applied)
         'alpha_ratio': alpha_ratio_debug,  # α / |Ĥ|²
@@ -606,7 +633,10 @@ def mmse_equalize(rx_grid, h_est, snr_db=20.0, alpha_reg=None, blend_factor=None
         'noise_power_constant': noise_power_constant_debug,  # Constant noise power from SNR input
         'snr_raw_linear': float(snr_raw_linear),  # SNR_raw in linear scale
         'snr_eq_linear': float(snr_eq_linear),  # SNR_eq in linear scale
-        'flag_csi_fail': int(flag_csi_fail)  # 🔧 A4: Flag for CSI failure (H_power < 1e-6)
+        'flag_csi_fail': int(flag_csi_fail),  # 🔧 A4: Flag for CSI failure (H_power < 1e-6)
+        # 🔧 NEW: Pattern indices source (critical for diagnosis)
+        'pattern_indices_source': pattern_indices_source,  # Source of pattern indices
+        'target_subcarriers_count': len(target_subcarriers_for_logging) if target_subcarriers_for_logging is not None else 0,
     }
     
     return x_eq, eq_info
