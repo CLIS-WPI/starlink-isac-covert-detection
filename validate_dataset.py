@@ -294,11 +294,19 @@ def main():
     
     # Export to CSV
     output_csv = args.output_csv or f"{RESULT_DIR}/validation_sanity.csv"
-    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-    
-    df = pd.DataFrame([validation_results])
-    df.to_csv(output_csv, index=False)
-    print(f"\n✅ Validation results exported to: {output_csv}")
+    try:
+        os.makedirs(os.path.dirname(output_csv) if os.path.dirname(output_csv) else '.', exist_ok=True)
+        df = pd.DataFrame([validation_results])
+        df.to_csv(output_csv, index=False)
+        print(f"\n✅ Validation results exported to: {output_csv}")
+    except PermissionError:
+        # Fallback: save to current directory
+        output_csv_fallback = "validation_sanity.csv"
+        df = pd.DataFrame([validation_results])
+        df.to_csv(output_csv_fallback, index=False)
+        print(f"\n⚠️  Permission denied for {output_csv}, saved to: {output_csv_fallback}")
+    except Exception as e:
+        print(f"\n⚠️  Could not export CSV: {e}")
     
     # Summary
     print("\n" + "="*70)

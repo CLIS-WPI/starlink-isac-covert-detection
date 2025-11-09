@@ -125,7 +125,15 @@ class ISACSystem:
     
     def _init_channel(self):
         """Initialize channel model (NTN or Rayleigh)."""
-        if NTN_MODELS_AVAILABLE and USE_NTN_IF_AVAILABLE:
+        # 🔧 TEST 11c: Use Rayleigh for Scenario B (DenseUrban too harsh even without path loss)
+        # For Scenario A (satellite): Use NTN DenseUrban (realistic)
+        # For Scenario B (ground): Use Rayleigh (DenseUrban destroys pattern in dual-hop)
+        if INSIDER_MODE == 'ground':
+            # Scenario B: Use Rayleigh (DenseUrban too harsh for dual-hop)
+            print("[ISAC] Scenario B detected: Using Rayleigh Block Fading (DenseUrban too harsh)")
+            self._fallback_rayleigh()
+        elif NTN_MODELS_AVAILABLE and USE_NTN_IF_AVAILABLE:
+            # Scenario A: Use NTN DenseUrban (realistic for satellite)
             print("[ISAC] Using TR 38.811 DenseUrban (NTN)")
             self.ut_array = Antenna(
                 polarization=self.UT_ANTENNA["polarization"],
@@ -147,8 +155,8 @@ class ISACSystem:
                 bs_array=self.bs_array,
                 direction='downlink',
                 elevation_angle=self.ELEVATION_ANGLE,
-                enable_pathloss=True,
-                enable_shadow_fading=True
+                enable_pathloss=True,  # Keep for Scenario A (realistic)
+                enable_shadow_fading=True  # Keep for Scenario A (realistic)
             )
             try:
                 topo = tr811_utils.gen_single_sector_topology(

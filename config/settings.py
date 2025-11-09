@@ -12,6 +12,11 @@ import numpy as np
 USE_NTN_IF_AVAILABLE = True
 GPU_INDEX = 0
 
+# 🔧 TEST 11e: Skip dual-hop for Scenario B testing (use single-hop instead)
+# Set to True to test if CNN can learn pattern without dual-hop attenuation
+# 🔧 FIX: Set to False to enable dual-hop + MMSE (for production/paper)
+USE_SINGLE_HOP_FOR_SCENARIO_B = False  # 🔧 FIX: Enable dual-hop + MMSE for Test 11d rerun
+
 # ======================================
 # 🔒 Reproducibility & Evaluation Settings (Phase 0)
 # ======================================
@@ -64,13 +69,47 @@ USE_RESIDUAL_CNN = True
 
 # ====== NEW: Scenario & CSI controls ======
 INSIDER_MODE = 'ground'  # 'sat' (downlink) | 'ground' (uplink->relay)
+
 USE_REALISTIC_CSI = True      # Enable estimation from pilots (LS/LMMSE)
-CSI_ESTIMATION = 'LS'         # 'LS' now, add 'LMMSE' later
+CSI_ESTIMATION = 'LMMSE'      # 'LS' or 'LMMSE' (enhanced 2D separable)
 POWER_PRESERVING_COVERT = True  # For paper: True (power-preserving, realistic)
                                  # For testing/debugging: False (detectable pattern)
 MIN_ELEVATION_DEG = 10.0
 NUM_SENSING_SATS = 12
 USE_SGP4 = False              # Off by default; enable with TLE later
+
+# ====== Enhanced CSI Configuration ======
+CSI_CFG = {
+    'pilots': {
+        'sym_idx': [2, 7],      # Pilot symbol indices
+        'density_t': 2,         # Pilot every 2 symbols
+        'density_f': 8,         # Pilot every 8 subcarriers (normal)
+        # 🔧 FIX: Temporarily increase pilot density for stability testing
+        # 'density_f': 4,       # Pilot every 4 subcarriers (for testing)
+        # 'density_f': 2,       # Pilot every 2 subcarriers (for extreme testing)
+    },
+    'lmmse': {
+        'tau_rms_s': 2.0e-6,    # RMS delay spread (seconds) - fixed from paper
+        'Tsym_s': 1.0e-3,       # OFDM symbol duration (seconds)
+        'subc_bw_hz': 15e3,     # Subcarrier bandwidth (Hz)
+        'doppler_ul_hz': 250.0, # Upper bound for fD_UL (Hz)
+        'doppler_dl_hz': 450.0, # Upper bound for fD_DL (Hz)
+        'alpha_eps': 1e-3,      # Small regularization
+        'win_t': 5,             # Temporal LMMSE filter window length
+        'win_f': 9              # Frequency LMMSE filter window length
+    },
+    'quality_gating': {
+        'nmse_good': -12.0,     # dB threshold for good CSI
+        'nmse_ok': -10.0,       # dB threshold for acceptable CSI
+        'nmse_bad': -8.0,       # dB threshold for bad CSI
+        'max_phase_err_deg': 20.0,  # Maximum phase error (degrees)
+        'max_delay_samp': 6,    # Maximum delay samples
+        'fuse_weight_good': 1.0,    # Fusion weight for good CSI
+        'fuse_weight_ok': 0.6,       # Fusion weight for acceptable CSI
+        'fuse_weight_bad': 0.0      # Fusion weight for bad CSI (disable)
+    },
+    'interp_mode': 'linear'     # Interpolation mode: 'nearest' or 'linear'
+}
 
 # Contiguous band injection (more spectral signature)
 NUM_COVERT_SUBCARRIERS = 16   # 🎯 Reduced from 32 to 16 for stronger per-subcarrier energy
@@ -105,7 +144,7 @@ ADD_NOISE = True   # Enable noise for realism
 NOISE_STD = 0.01  # Reduced noise for better learning
 
 # 🎯 ADVANCED TRAINING SETTINGS
-USE_FOCAL_LOSS = True
+USE_FOCAL_LOSS = False  # 🔧 TEST 5: Disabled for Scenario B (pattern too small, all samples are "hard")
 FOCAL_LOSS_GAMMA = 2.5         # Increased from 2.0 to 2.5 (more focus on hard examples)
 FOCAL_LOSS_ALPHA = 0.5         # Increased from 0.25 to 0.5 (better balance)
 USE_DATA_AUGMENTATION = True   # 🆕 Apply data augmentation

@@ -109,22 +109,27 @@ class CNNDetector:
         if len(input_shape) == 2:  # (symbols, subcarriers)
             x = layers.Reshape((*input_shape, 1))(x)
         
+        # 🔧 TEST 7: Reduced pooling to preserve small patterns
+        # Original: 2 pooling layers (too aggressive for small patterns)
+        # New: 1 pooling layer + stride=2 in conv (preserves more spatial info)
+        
         # Conv Block 1: Detect local patterns
         x = layers.Conv2D(32, (3, 3), padding='same', 
                          kernel_regularizer=regularizers.l2(0.001),
                          name=f"{name_prefix}_conv1")(x)
         x = layers.BatchNormalization(name=f"{name_prefix}_bn1")(x)
         x = layers.Activation('relu', name=f"{name_prefix}_act1")(x)
+        # 🔧 TEST 7: Only one pooling to preserve pattern
         x = layers.MaxPooling2D((2, 2), name=f"{name_prefix}_pool1")(x)
         x = layers.Dropout(self.dropout_rate, name=f"{name_prefix}_drop1")(x)
         
-        # Conv Block 2: Higher-level features
-        x = layers.Conv2D(64, (3, 3), padding='same',
+        # Conv Block 2: Higher-level features (no pooling, use stride=2 instead)
+        x = layers.Conv2D(64, (3, 3), padding='same', strides=(2, 2),
                          kernel_regularizer=regularizers.l2(0.001),
                          name=f"{name_prefix}_conv2")(x)
         x = layers.BatchNormalization(name=f"{name_prefix}_bn2")(x)
         x = layers.Activation('relu', name=f"{name_prefix}_act2")(x)
-        x = layers.MaxPooling2D((2, 2), name=f"{name_prefix}_pool2")(x)
+        # 🔧 TEST 7: No second pooling - preserve more spatial information
         x = layers.Dropout(self.dropout_rate, name=f"{name_prefix}_drop2")(x)
         
         # Conv Block 3: Deep representations
@@ -134,11 +139,33 @@ class CNNDetector:
         x = layers.BatchNormalization(name=f"{name_prefix}_bn3")(x)
         x = layers.Activation('relu', name=f"{name_prefix}_act3")(x)
         
-        # 🔧 OPTIMIZATION: Add spatial attention for subcarrier pattern detection
-        # This helps focus on frequencies where covert injection occurs
+        # 🔧 TEST 8: Enhanced attention for subcarrier pattern detection
+        # This helps focus on frequencies where covert injection occurs (24-39)
+        # Use channel-wise attention to emphasize important subcarriers
         attention_conv = layers.Conv2D(1, (1, 1), activation='sigmoid', 
                                        name=f"{name_prefix}_attention")(x)
         x = layers.Multiply(name=f"{name_prefix}_attn_mult")([x, attention_conv])
+        
+        # 🔧 TEST 8: Add frequency-domain attention (focus on subcarriers 24-39)
+        # Compute attention weights per subcarrier (frequency dimension)
+        # This helps the model focus on the target frequency band
+        # Get current shape for dynamic attention
+        freq_attention = layers.Lambda(
+            lambda x: tf.reduce_mean(x, axis=[1, 3], keepdims=True),  # Average over symbols and channels: (batch, 1, subcarriers, 1)
+            name=f"{name_prefix}_freq_attn_prep"
+        )(x)
+        # Squeeze to get (batch, subcarriers) for Dense layer
+        freq_attention = layers.Lambda(
+            lambda x: tf.squeeze(x, axis=[1, 3]),
+            name=f"{name_prefix}_freq_attn_squeeze"
+        )(freq_attention)
+        # Apply Dense to learn per-subcarrier attention weights
+        num_subcarriers = freq_attention.shape[-1] if freq_attention.shape[-1] is not None else 16  # After pooling
+        freq_attention = layers.Dense(num_subcarriers, activation='sigmoid',
+                                     name=f"{name_prefix}_freq_attn_dense")(freq_attention)
+        # Reshape back to (batch, 1, subcarriers, 1) for broadcasting
+        freq_attention = layers.Reshape((1, -1, 1), name=f"{name_prefix}_freq_attn_reshape")(freq_attention)
+        x = layers.Multiply(name=f"{name_prefix}_freq_attn_mult")([x, freq_attention])
         
         # 🔧 OPTIMIZATION: Add one more conv block for deeper pattern learning
         x = layers.Conv2D(256, (3, 3), padding='same',
@@ -284,18 +311,26 @@ class CNNDetector:
             # CNN-only: OFDM grids
             ofdm_input, ofdm_features = self._build_ofdm_encoder(ofdm_shape)
             
-            # Classification head
-            x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
+            # 🔧 TEST 6: Deeper classification head for better capacity
+            # Original: 64 -> 32 -> 1 (too shallow for small patterns)
+            # New: 128 -> 64 -> 32 -> 1 (deeper network)
+            x = layers.Dense(128, kernel_regularizer=regularizers.l2(0.001),
                            name="head_dense1")(ofdm_features)
             x = layers.BatchNormalization(name="head_bn1")(x)
             x = layers.Activation('relu', name="head_act1")(x)
             x = layers.Dropout(self.dropout_rate, name="head_drop1")(x)
             
-            x = layers.Dense(32, kernel_regularizer=regularizers.l2(0.001),
+            x = layers.Dense(64, kernel_regularizer=regularizers.l2(0.001),
                            name="head_dense2")(x)
             x = layers.BatchNormalization(name="head_bn2")(x)
             x = layers.Activation('relu', name="head_act2")(x)
             x = layers.Dropout(self.dropout_rate, name="head_drop2")(x)
+            
+            x = layers.Dense(32, kernel_regularizer=regularizers.l2(0.001),
+                           name="head_dense3")(x)
+            x = layers.BatchNormalization(name="head_bn3")(x)
+            x = layers.Activation('relu', name="head_act3")(x)
+            x = layers.Dropout(self.dropout_rate, name="head_drop3")(x)
             
             outputs = layers.Dense(1, activation='sigmoid', name="output")(x)
             

@@ -28,13 +28,19 @@ This project implements an intelligent and automated covert channel detection sy
 
 ```bash
 # Build image
-docker build -t covert_l .
+docker build -t covert_l -f .devcontainer/Dockerfile .
 
 # Run container (with GPU support)
-docker run --gpus all --user root -it \
+docker run --gpus all -it --user root \
+  --ipc=host \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  --name covert_l_dev \
   -v "$(pwd)":/workspace \
   -w /workspace \
   covert_l:latest
+
+docker start -ai covert_l_dev
+
 
 # Generate dataset (parallel on 2 GPUs)
 python3 generate_dataset_parallel.py

@@ -213,7 +213,9 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
         # ============================================================
         # SCENARIO B: Dual-hop (Uplink → Relay → Downlink)
         # ============================================================
-        if INSIDER_MODE == 'ground':
+        # 🔧 TEST 11e: Skip dual-hop for testing (use single-hop instead)
+        from config.settings import USE_SINGLE_HOP_FOR_SCENARIO_B
+        if INSIDER_MODE == 'ground' and not USE_SINGLE_HOP_FOR_SCENARIO_B:
             from core.scenario_b_relay import (
                 amplify_and_forward_relay,
                 compute_doppler_ul,
@@ -305,7 +307,14 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
             # RELAY: Amplify-and-Forward with AGC + Delay
             # ============================================================
             delay_samples = np.random.randint(3, 6)  # 3-5 samples delay
-            target_power_relay = tf.reduce_mean(tf.abs(y_time_ul_noisy)**2)
+            input_power_relay = tf.reduce_mean(tf.abs(y_time_ul_noisy)**2)
+            # 🔧 CRITICAL FIX: Increase target power significantly to compensate for dual-hop attenuation
+            # With -41 dB channel attenuation, we need MUCH more amplification at relay
+            # Original: target_power = input_power (no amplification)
+            # Test 11d: target_power = 2.0 * input_power (still too weak)
+            # Previous: target_power = 4.0 * input_power (still too weak, SNR_raw = -29 dB)
+            # Final: target_power = 8.0 * input_power (compensate for -41 dB dual-hop attenuation)
+            target_power_relay = input_power_relay * 8.0  # 🔧 CRITICAL: Increased from 4.0 (much more amplification)
             
             y_time_relay_batch = tf.expand_dims(y_time_ul_noisy, axis=0)
             y_time_relay, gain_relay, delay_applied = amplify_and_forward_relay(
@@ -401,17 +410,142 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
             y_time_noisy = y_time_dl_dopp + n_dl
             
             # Store Scenario B metadata
+            # 🔧 NEW: Store True Channel (h_freq_dl) for validation and real NMSE computation
+            h_f_dl_np = h_f_dl.numpy() if hasattr(h_f_dl, 'numpy') else h_f_dl
+            # Extract true channel: shape should be (1, 1, 1, num_symbols, num_subcarriers)
+            # Squeeze to (num_symbols, num_subcarriers)
+            if len(h_f_dl_np.shape) >= 4:
+                h_true_dl = np.squeeze(h_f_dl_np)
+                # Ensure 2D shape
+                if len(h_true_dl.shape) == 1:
+                    h_true_dl = h_true_dl.reshape(-1, 1)
+            else:
+                h_true_dl = h_f_dl_np
+            
             scenario_b_meta = {
                 'fd_ul': float(f_d_ul),
                 'fd_dl': float(f_d_dl),
                 'G_r_mean': float(gain_relay),
                 'delay_samples': int(delay_applied),
                 'snr_ul': float(snr_ul),
-                'snr_dl': float(snr_dl)
+                'snr_dl': float(snr_dl),
+                'h_true_dl': h_true_dl  # 🔧 NEW: True channel for validation
             }
             
             # Use DL Doppler for main doppler_hz field
             f_d = f_d_dl
+        
+        # ============================================================
+        # 🔧 TEST 11e: Single-hop for Scenario B (skip relay for testing)
+        # ============================================================
+        elif INSIDER_MODE == 'ground' and USE_SINGLE_HOP_FOR_SCENARIO_B:
+            # Use single-hop channel (like Scenario A) for testing
+            # This helps diagnose if dual-hop is the problem
+            print(f"  🔧 TEST 11e: Using single-hop for Scenario B (skipping relay)")
+            
+            # Apply single channel (like Scenario A)
+            tx_time = isac_system.modulator(tx_grid_injected)
+            tx_time_flat = tf.squeeze(tx_time)
+            
+            # Generate channel (same as Scenario A)
+            if NTN_AVAILABLE and hasattr(isac_system.CHANNEL_MODEL, 'set_topology'):
+                ut_pos = tf.constant([[emitter_pos]], dtype=tf.float32)
+                bs_pos = tf.constant([[sat_pos]], dtype=tf.float32)
+                bs_vel = tf.constant([[sat_vel]], dtype=tf.float32)
+                ut_vel = tf.zeros_like(ut_pos)
+                try:
+                    isac_system.CHANNEL_MODEL.set_topology(ut_pos, bs_pos, ut_vel, bs_vel)
+                    a, tau = isac_system.CHANNEL_MODEL(1, isac_system.rg.bandwidth)
+                except Exception:
+                    a, tau = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
+            else:
+                a, tau = isac_system.CHANNEL_MODEL(1, num_time_steps=isac_system.NUM_OFDM_SYMBOLS, sampling_frequency=isac_system.rg.bandwidth)
+            
+            # Sanitize CIR
+            a_is_finite = tf.logical_and(
+                tf.math.is_finite(tf.math.real(a)),
+                tf.math.is_finite(tf.math.imag(a))
+            )
+            a = tf.where(a_is_finite, a, tf.zeros_like(a))
+            tau = tf.where(tf.math.is_finite(tau), tau, tf.zeros_like(tau))
+            
+            # CIR -> time channel (same pattern as dual-hop)
+            l_min, l_max = time_lag_discrete_time_channel(isac_system.rg.bandwidth)
+            h_time = cir_to_time_channel(isac_system.rg.bandwidth, a, tau, l_min, l_max, normalize=True)
+            
+            # Tile if needed (same as dual-hop)
+            if h_time.shape[-2] == 1:
+                mult = [1] * len(h_time.shape)
+                mult[-2] = isac_system.NUM_OFDM_SYMBOLS
+                h_time = tf.tile(h_time, mult)
+            
+            # Convert to frequency domain
+            h_freq = time_to_ofdm_channel(h_time, isac_system.rg, l_min)
+            h_freq = tf.reduce_mean(h_freq, axis=4) if len(h_freq.shape) > 4 else h_freq
+            h_freq = tf.reduce_mean(h_freq, axis=2) if len(h_freq.shape) > 3 else h_freq
+            h_f = h_freq[:, 0, 0, :, :] if len(h_freq.shape) > 2 else h_freq
+            h_f = tf.expand_dims(h_f, axis=1) if len(h_f.shape) == 2 else h_f
+            h_f = tf.expand_dims(h_f, axis=2) if len(h_f.shape) == 3 else h_f
+            
+            # Apply channel in frequency domain (same as Scenario A)
+            tx_grid_expanded = tf.expand_dims(tx_grid_injected, axis=0) if len(tx_grid_injected.shape) == 4 else tx_grid_injected
+            y_grid = tx_grid_expanded * h_f
+            
+            # Convert to time domain
+            y_time = isac_system.modulator(y_grid)
+            y_time = tf.squeeze(y_time, axis=0) if len(y_time.shape) > 1 else y_time
+            
+            # Apply Doppler (compute like Scenario A)
+            c0 = 3e8
+            em_pos = emitter_pos
+            los = np.array(sat_pos) - np.array(em_pos)
+            los_hat = los / (np.linalg.norm(los) + 1e-12)
+            v_rel = np.dot(np.array(sat_vel), los_hat)
+            f_d_base = (v_rel / c0) * CARRIER_FREQUENCY
+            f_d = f_d_base * doppler_scale  # Apply Phase 1 Doppler scale
+            
+            y_time_flat = tf.squeeze(y_time) if len(y_time.shape) > 1 else y_time
+            y_time_dopp = isac_system.apply_doppler_time(y_time_flat, float(f_d))
+            
+            # Add noise
+            rx_pow = tf.reduce_mean(tf.abs(y_time_dopp)**2)
+            rx_pow = tf.maximum(rx_pow, 1e-20)
+            esn0 = 10.0**(snr_db/10.0)
+            sigma2 = rx_pow / (esn0 + 1e-12)
+            std = tf.sqrt(tf.cast(tf.maximum(sigma2 / 2.0, 1e-30), tf.float32))
+            n = tf.complex(
+                tf.random.normal(tf.shape(y_time_dopp), stddev=std),
+                tf.random.normal(tf.shape(y_time_dopp), stddev=std)
+            )
+            y_time_noisy = y_time_dopp + n
+            
+            # Convert to frequency domain
+            y_time_noisy_batch = tf.expand_dims(y_time_noisy, axis=0)
+            y_grid_noisy = isac_system.demodulator(y_time_noisy_batch)
+            
+            # 🔧 NEW: Store True Channel for single-hop Scenario B (for validation)
+            h_f_np = h_f.numpy() if hasattr(h_f, 'numpy') else h_f
+            if len(h_f_np.shape) >= 4:
+                h_true_single = np.squeeze(h_f_np)
+                if len(h_true_single.shape) == 1:
+                    h_true_single = h_true_single.reshape(-1, 1)
+            else:
+                h_true_single = h_f_np
+            
+            # Store metadata (single-hop)
+            scenario_b_meta = {
+                'fd_ul': float(f_d),
+                'fd_dl': float(f_d),
+                'G_r_mean': 1.0,  # No relay
+                'delay_samples': 0,
+                'snr_ul': float(snr_db),
+                'snr_dl': float(snr_db),
+                'h_true_dl': h_true_single  # 🔧 NEW: True channel for single-hop validation
+            }
+            
+            # Skip the rest of the processing (will be handled after the if-else block)
+            # Set y_time_noisy to None to indicate we already processed it
+            y_time_noisy = None  # Mark as processed
         
         # ============================================================
         # SCENARIO A: Single downlink channel
@@ -443,9 +577,13 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
                 tf.random.normal(tf.shape(y_time_dopp), stddev=std_td)
             )
             y_time_noisy = y_time_dopp + n_td
+        
         # Expand dims for demodulator: (N,) -> (1, N) for batch dimension
-        y_time_noisy_batch = tf.expand_dims(y_time_noisy, axis=0)
-        y_grid_noisy = isac_system.demodulator(y_time_noisy_batch)
+        # 🔧 TEST 11e: Skip if already processed (single-hop mode)
+        if 'y_grid_noisy' not in locals() or y_grid_noisy is None:
+            y_time_noisy_batch = tf.expand_dims(y_time_noisy, axis=0)
+            y_grid_noisy = isac_system.demodulator(y_time_noisy_batch)
+        # else: y_grid_noisy already set in single-hop block above
         
         # Store RX grid - squeeze to remove batch dimension if present
         # demodulator returns shape like [1, symbols, subcarriers] or [1, 1, 1, symbols, subcarriers]
@@ -478,56 +616,172 @@ def generate_dataset_phase1(isac_system, num_samples, num_satellites,
         num_symbols, num_subcarriers = int(rx_squeezed.shape[0]), int(rx_squeezed.shape[1])
         
         # ============================================================
-        # ✅ NEW: MMSE Equalization for Scenario B (Pilot-assisted)
+        # ✅ Enhanced: LMMSE 2D Separable + MMSE Equalization for Scenario B
         # ============================================================
         if INSIDER_MODE == 'ground':
-            # Use LMMSE estimation for better channel estimate
+            # Use enhanced LMMSE 2D separable estimation
             from core.csi_estimation import (
-                estimate_csi_lmmse_simple,
+                estimate_csi_lmmse_2d_separable,
                 mmse_equalize,
-                compute_pattern_preservation
+                compute_pattern_preservation,
+                compute_csi_quality_gate
             )
+            from config.settings import CSI_ESTIMATION, CSI_CFG
             
-            # Estimate CSI using LMMSE (better than LS for low SNR)
-            h_est_np = estimate_csi_lmmse_simple(
-                tx_grid_np, rx_grid_np,
-                pilot_symbols=pilot_symbols,
-                snr_db=snr_dl  # Use downlink SNR for Scenario B
-            )
+            # Prepare metadata for LMMSE (with Phase 6 info)
+            csi_metadata = {}
+            if scenario_b_meta is not None:
+                csi_metadata = {
+                    'fd_ul': scenario_b_meta.get('fd_ul', 0.0),
+                    'fd_dl': scenario_b_meta.get('fd_dl', 0.0),
+                    'delay_samples': scenario_b_meta.get('delay_samples', 0),
+                    'snr_ul_db': scenario_b_meta.get('snr_ul', snr_db),
+                    'snr_dl_db': scenario_b_meta.get('snr_dl', snr_dl)
+                }
             
-            # Apply MMSE equalization
+            # 🔧 NEW: Get True Channel from metadata for real NMSE computation
+            h_true_dl = None
+            if scenario_b_meta is not None and 'h_true_dl' in scenario_b_meta:
+                h_true_dl = scenario_b_meta['h_true_dl']
+                # Ensure it's numpy array and correct shape
+                if hasattr(h_true_dl, 'numpy'):
+                    h_true_dl = h_true_dl.numpy()
+                h_true_dl = np.array(h_true_dl, dtype=np.complex64)
+                # Ensure shape matches (num_symbols, num_subcarriers)
+                if h_true_dl.shape != (num_symbols, num_subcarriers):
+                    # Try to reshape if possible
+                    if h_true_dl.size == num_symbols * num_subcarriers:
+                        h_true_dl = h_true_dl.reshape(num_symbols, num_subcarriers)
+                    else:
+                        # Try to extract correct dimensions
+                        if len(h_true_dl.shape) > 2:
+                            h_true_dl = np.squeeze(h_true_dl)
+                        if h_true_dl.shape != (num_symbols, num_subcarriers):
+                            h_true_dl = None  # Skip if shape mismatch
+            
+            # Estimate CSI using enhanced LMMSE 2D separable
+            if CSI_ESTIMATION == 'LMMSE':
+                h_est_np, csi_info = estimate_csi_lmmse_2d_separable(
+                    tx_grid_np, rx_grid_np,
+                    pilot_symbols=pilot_symbols,
+                    metadata=csi_metadata,
+                    csi_cfg=CSI_CFG
+                )
+            else:
+                # Fallback to simple LMMSE
+                from core.csi_estimation import estimate_csi_lmmse_simple
+                h_est_np = estimate_csi_lmmse_simple(
+                    tx_grid_np, rx_grid_np,
+                    pilot_symbols=pilot_symbols,
+                    snr_db=snr_dl
+                )
+                csi_info = {'pilot_mse': None, 'noise_variance': None, 'P_H': None}
+            
+            # 🔧 NEW: Compute real NMSE using True Channel (if available)
+            if h_true_dl is not None:
+                from core.csi_estimation import compute_nmse
+                nmse_real_db = compute_nmse(h_true_dl, h_est_np)
+                # Update csi_info with real NMSE
+                if nmse_real_db is not None:
+                    csi_info['nmse_real_db'] = nmse_real_db  # Real NMSE from True Channel
+                    # Keep approximate NMSE as 'nmse_db' for backward compatibility
+                    if 'nmse_db' not in csi_info:
+                        csi_info['nmse_db'] = nmse_real_db  # Use real NMSE as fallback
+            
+            # Compute quality gate for CSI fusion
+            fusion_weight, quality_label = compute_csi_quality_gate(csi_info, CSI_CFG)
+            
+            # Apply MMSE equalization with improved CSI
+            # 🔧 FIX: Use correct SNR (snr_dl for dual-hop, snr_db for single-hop)
+            # 🔧 CRITICAL FIX: Pass noise_variance from CSI estimation (more accurate than SNR input)
+            snr_for_eq = scenario_b_meta.get('snr_dl', snr_db) if scenario_b_meta else snr_db
+            noise_var_from_csi = csi_info.get('noise_variance', None)  # From LMMSE estimation
             rx_grid_eq, eq_info = mmse_equalize(
                 rx_grid_np, h_est_np,
-                snr_db=snr_dl,  # Use downlink SNR
+                snr_db=snr_for_eq,  # Use downlink SNR for dual-hop, main SNR for single-hop
                 alpha_reg=None,  # Auto-compute based on SNR
-                blend_factor=None  # Auto-compute based on SNR
+                blend_factor=None,  # Auto-compute based on SNR
+                noise_variance_est=noise_var_from_csi  # 🔧 CRITICAL: Use noise variance from CSI estimation
             )
             
-            # Monitor pattern preservation (for first few samples)
-            if sample_idx < 10:  # Only for first 10 samples to avoid overhead
-                try:
-                    preservation_metrics = compute_pattern_preservation(
-                        tx_grid_np, rx_grid_np, rx_grid_eq,
-                        target_subcarriers=np.arange(24, 40)
-                    )
-                    # Log if preservation is poor
-                    if preservation_metrics['preservation_eq'] < 0.6:
+            # 🔧 FIX: Trust MMSE's own blend policy - don't override it
+            # MMSE already applies appropriate blending based on snr_raw_db
+            # The conservative blending logic was causing double-blending issues
+            # Only skip equalization if SNR improvement is extremely negative (< -10 dB)
+            snr_improvement = eq_info.get('snr_improvement_db', 0)
+            blend_from_mmse = eq_info.get('blend_factor', 1.0)
+            
+            if snr_improvement < -10.0:  # Very negative improvement (extremely bad)
+                # Equalization is making things much worse - use raw signal
+                rx_grid_np = rx_grid_np.astype(np.complex64)
+                eq_info['blend_factor'] = 0.0  # Mark as not used
+                eq_info['snr_improvement_db'] = 0.0  # No improvement
+            else:
+                # Use MMSE's blend factor (already computed based on snr_raw_db)
+                # This respects MMSE's own blending policy (0.7 for SNR<3dB, 0.85 for 3-5dB, 1.0 for >5dB)
+                if blend_from_mmse < 1.0:
+                    # MMSE already applied blending, use the equalized signal as-is
+                    rx_grid_np = rx_grid_eq.astype(np.complex64)
+                else:
+                    # Full equalization
+                    rx_grid_np = rx_grid_eq.astype(np.complex64)
+            
+            # Monitor pattern preservation (for all samples - needed for acceptance criteria)
+            preservation_eq = None
+            try:
+                preservation_metrics = compute_pattern_preservation(
+                    tx_grid_np, rx_grid_np, rx_grid_eq,
+                    target_subcarriers=np.arange(24, 40)
+                )
+                preservation_eq = preservation_metrics.get('preservation_eq')
+                
+                # Log if preservation is poor (for first 10 samples only)
+                if sample_idx < 10 and preservation_eq is not None:
+                    if preservation_eq < 0.6:
                         print(f"  ⚠️  Sample {sample_idx}: Poor pattern preservation "
-                              f"(preservation={preservation_metrics['preservation_eq']:.3f})")
-                except Exception as e:
-                    pass  # Skip if computation fails
+                              f"(preservation={preservation_eq:.3f}, "
+                              f"SNR_improvement={snr_improvement:.2f} dB)")
+            except Exception as e:
+                pass  # Skip if computation fails
             
-            # Use equalized signal for Scenario B
-            rx_grid_np = rx_grid_eq.astype(np.complex64)
-            
-            # Store equalization info in metadata
+            # Store enhanced CSI and equalization info in metadata
             if scenario_b_meta is None:
                 scenario_b_meta = {}
+            
+            # CSI estimation metrics
+            scenario_b_meta['csi_nmse_db'] = csi_info.get('nmse_db')  # Approximate NMSE (backward compatibility)
+            scenario_b_meta['csi_nmse_real_db'] = csi_info.get('nmse_real_db')  # 🔧 NEW: Real NMSE from True Channel
+            scenario_b_meta['csi_pilot_mse'] = csi_info.get('pilot_mse')
+            scenario_b_meta['csi_noise_variance'] = csi_info.get('noise_variance')
+            scenario_b_meta['csi_P_H'] = csi_info.get('P_H')
+            scenario_b_meta['csi_fd_max_used'] = csi_info.get('fd_max_used')
+            scenario_b_meta['csi_tau_rms_used'] = csi_info.get('tau_rms_used')
+            scenario_b_meta['csi_lmmse_win_t'] = csi_info.get('lmmse_win_t')
+            scenario_b_meta['csi_lmmse_win_f'] = csi_info.get('lmmse_win_f')
+            scenario_b_meta['csi_delay_comp_samples'] = csi_info.get('delay_comp_samples')
+            scenario_b_meta['csi_phase_comp_deg'] = csi_info.get('phase_comp_deg')
+            scenario_b_meta['csi_quality_label'] = quality_label
+            scenario_b_meta['csi_fusion_weight'] = fusion_weight
+            # 🔧 NEW: Store True Channel in metadata (for validation/debugging)
+            if h_true_dl is not None:
+                scenario_b_meta['h_true_dl'] = h_true_dl  # True channel (complex64 array)
+            
+            # Equalization metrics
             scenario_b_meta['eq_alpha'] = eq_info['alpha_used']
             scenario_b_meta['eq_snr_db'] = eq_info['snr_eq_db']
-            scenario_b_meta['eq_snr_raw_db'] = eq_info.get('snr_raw_db', snr_dl)  # 🔧 FINAL CHECK: Pre-EQ SNR
-            scenario_b_meta['eq_snr_improvement_db'] = eq_info.get('snr_improvement_db', 0.0)  # 🔧 FINAL CHECK: SNR gain
+            scenario_b_meta['eq_snr_raw_db'] = eq_info.get('snr_raw_db', snr_dl)
+            scenario_b_meta['eq_snr_improvement_db'] = eq_info.get('snr_improvement_db', 0.0)
+            # 🔧 DEBUG: Store additional metadata for diagnosis
+            scenario_b_meta['alpha_ratio'] = eq_info.get('alpha_ratio', 0.0)
+            scenario_b_meta['h_power_mean'] = eq_info.get('h_power_mean', 0.0)
+            scenario_b_meta['signal_power_raw'] = eq_info.get('signal_power_raw', 0.0)
+            scenario_b_meta['noise_power_constant'] = eq_info.get('noise_power_constant', 0.0)
+            scenario_b_meta['snr_raw_linear'] = eq_info.get('snr_raw_linear', 0.0)
+            scenario_b_meta['snr_eq_linear'] = eq_info.get('snr_eq_linear', 0.0)
             scenario_b_meta['eq_blend_factor'] = eq_info['blend_factor']
+            scenario_b_meta['eq_pattern_preservation'] = preservation_eq  # 🔧 FIX: Store preservation for acceptance check
+            # 🔧 A4: Store CSI failure flag
+            scenario_b_meta['flag_csi_fail'] = eq_info.get('flag_csi_fail', 0)
         else:
             # Scenario A: Use simple LS estimation (no equalization needed)
             h_est_np = np.zeros((num_symbols, num_subcarriers), dtype=np.complex64)

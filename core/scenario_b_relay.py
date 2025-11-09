@@ -42,9 +42,15 @@ def amplify_and_forward_relay(y_ul, target_power=None, gain_limit_db=30.0, delay
     # Compute required gain
     gain_linear = target_power / input_power
     
-    # Phase 6: Limit gain to prevent excessive amplification (0.5 to 2.0 range)
-    gain_min = 0.5
-    gain_max = 2.0
+    # Phase 6: Limit gain to prevent excessive amplification
+    # 🔧 CRITICAL FIX: Increase relay gain significantly to compensate for dual-hop attenuation
+    # With -41 dB channel attenuation, we need MUCH more amplification
+    # Original: gain_min=0.5, gain_max=2.0 → signal too weak
+    # Test 11d: gain_min=1.0, gain_max=4.0 → still too weak
+    # Previous: gain_min=2.0, gain_max=8.0 → still too weak (SNR_raw = -29 dB)
+    # Final: gain_min=4.0, gain_max=16.0 → compensate for -41 dB dual-hop attenuation
+    gain_min = 4.0  # 🔧 CRITICAL: Increased from 2.0 (allow much more amplification)
+    gain_max = 16.0  # 🔧 CRITICAL: Increased from 8.0 (compensate for -41 dB dual-hop attenuation)
     gain_linear = tf.clip_by_value(gain_linear, gain_min, gain_max)
     
     # Apply gain

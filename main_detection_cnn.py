@@ -220,11 +220,19 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
     print(f"  → Benign: {np.sum(dataset['labels'] == 0)}")
     print(f"  → Attack: {np.sum(dataset['labels'] == 1)}")
     
+    # 🔧 TEST 10: Use tx_grids for testing (to check if problem is from channel)
     # Extract data - ✅ REALISTIC: Use rx_grids (post-channel) for training
     # Reason: In practice, detector only sees rx_grid (after channel distortion)
     # Training on rx_grid makes the model realistic and generalizable
     # This is the correct approach for real-world deployment
-    if 'rx_grids' in dataset:
+    USE_PRE_CHANNEL_FOR_TEST = False  # 🔧 TEST 10: Set to False for production (was True for testing)
+    
+    if USE_PRE_CHANNEL_FOR_TEST and 'tx_grids' in dataset:
+        # 🔧 TEST 10: Use pre-channel for testing (to diagnose channel problem)
+        X_grids = dataset['tx_grids']  # Pre-channel (for testing only)
+        print(f"  🔧 TEST 10: Using PRE-CHANNEL tx_grids (for testing channel impact)")
+        print(f"  → This will show if the problem is from channel or CNN")
+    elif 'rx_grids' in dataset:
         # Use post-channel for realistic training (both CNN-only and CNN+CSI)
         X_grids = dataset['rx_grids']  # Post-channel (realistic, what detector sees in practice)
         print(f"  ✓ Using POST-CHANNEL rx_grids (realistic training for {'CNN+CSI' if use_csi else 'CNN-only'})")
@@ -247,13 +255,82 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False):
         X_grids = compute_spectrogram(X_grids)
     
     X_csi = None
+    csi_fusion_weights = None  # Quality-aware fusion weights
+    
     if use_csi and 'csi_est' in dataset and dataset['csi_est'] is not None:
         X_csi = dataset['csi_est']
-        print(f"  ✓ CSI_est (LS) available: shape {X_csi.shape}")
+        print(f"  ✓ CSI_est available: shape {X_csi.shape}")
         # 🔧 DEBUG: Fix CSI shape if needed (remove extra dimension)
         if X_csi.ndim == 4 and X_csi.shape[1] == 1:
             X_csi = np.squeeze(X_csi, axis=1)
             print(f"  🔧 Fixed CSI shape: {X_csi.shape}")
+        
+        # ===== Quality-Aware Gating for CSI Fusion =====
+        # Extract fusion weights from metadata (if available)
+        if 'meta' in dataset and isinstance(dataset['meta'], list):
+            from config.settings import CSI_CFG
+            quality_cfg = CSI_CFG['quality_gating']
+            
+            csi_fusion_weights = []
+            csi_quality_stats = {'good': 0, 'ok': 0, 'bad': 0}
+            
+            for i, meta_dict in enumerate(dataset['meta']):
+                if isinstance(meta_dict, dict):
+                    # Get fusion weight from metadata (computed during dataset generation)
+                    fusion_weight = meta_dict.get('csi_fusion_weight', 1.0)
+                    quality_label = meta_dict.get('csi_quality_label', 'unknown')
+                    
+                    # If not in metadata, compute from CSI metrics
+                    if fusion_weight == 1.0 and 'csi_nmse_db' in meta_dict:
+                        from core.csi_estimation import compute_csi_quality_gate
+                        csi_info = {
+                            'nmse_db': meta_dict.get('csi_nmse_db'),
+                            'pilot_mse': meta_dict.get('csi_pilot_mse'),
+                            'noise_variance': meta_dict.get('csi_noise_variance'),
+                            'P_H': meta_dict.get('csi_P_H'),
+                            'phase_comp_deg': meta_dict.get('csi_phase_comp_deg', 0.0),
+                            'delay_comp_samples': meta_dict.get('csi_delay_comp_samples', 0)
+                        }
+                        fusion_weight, quality_label = compute_csi_quality_gate(csi_info, CSI_CFG)
+                    
+                    csi_fusion_weights.append(fusion_weight)
+                    
+                    # Statistics
+                    if quality_label == 'good':
+                        csi_quality_stats['good'] += 1
+                    elif quality_label == 'ok':
+                        csi_quality_stats['ok'] += 1
+                    else:
+                        csi_quality_stats['bad'] += 1
+                else:
+                    csi_fusion_weights.append(1.0)  # Default weight
+            
+            csi_fusion_weights = np.array(csi_fusion_weights, dtype=np.float32)
+            
+            # Log quality statistics
+            total_samples = len(csi_fusion_weights)
+            print(f"  📊 CSI Quality Statistics:")
+            print(f"     Good (weight=1.0): {csi_quality_stats['good']}/{total_samples} ({100*csi_quality_stats['good']/total_samples:.1f}%)")
+            print(f"     OK (weight=0.6): {csi_quality_stats['ok']}/{total_samples} ({100*csi_quality_stats['ok']/total_samples:.1f}%)")
+            print(f"     Bad (weight=0.0): {csi_quality_stats['bad']}/{total_samples} ({100*csi_quality_stats['bad']/total_samples:.1f}%)")
+            print(f"     Mean fusion weight: {np.mean(csi_fusion_weights):.3f}")
+            
+            # Apply quality gating: scale CSI by fusion weights
+            if X_csi.ndim == 3:  # (N, symbols, subcarriers)
+                # Broadcast weights to match CSI shape
+                weights_expanded = csi_fusion_weights[:, np.newaxis, np.newaxis]
+                X_csi = X_csi * weights_expanded
+                print(f"  ✅ Applied quality-aware gating to CSI (weighted by fusion weights)")
+            elif X_csi.ndim == 2:  # (N, features)
+                weights_expanded = csi_fusion_weights[:, np.newaxis]
+                X_csi = X_csi * weights_expanded
+                print(f"  ✅ Applied quality-aware gating to CSI (weighted by fusion weights)")
+            
+            # Check if any samples have zero weight (CSI disabled)
+            disabled_count = np.sum(csi_fusion_weights < 0.01)
+            if disabled_count > 0:
+                print(f"  ⚠️  {disabled_count} samples have CSI disabled (weight < 0.01) due to poor quality")
+        
     elif use_csi and 'csi' in dataset:
         X_csi = dataset['csi']
         print(f"  ✓ CSI (legacy) available: shape {X_csi.shape}")
