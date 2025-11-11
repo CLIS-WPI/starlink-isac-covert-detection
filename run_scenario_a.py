@@ -36,8 +36,7 @@ def run_command(cmd, description, timeout=1800, log_file=None):
     try:
         with open(log_file, 'w') as log_f:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=timeout,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                cmd, shell=True, capture_output=True, text=True, timeout=timeout
             )
             
             # Write to log file
@@ -191,7 +190,8 @@ def generate_final_report():
         print(f"      • Recall: {f1_opt.get('recall', 0):.4f}")
         print(f"      • F1 Score: {f1_opt.get('f1', 0):.4f}")
         
-        if prec_opt:
+        # Only show precision-oriented if it differs from F1-optimal
+        if prec_opt and abs(prec_opt.get('threshold', 0) - f1_opt.get('threshold', 0)) > 0.0001:
             print(f"\n   📌 Precision-Oriented Threshold (Precision ≥ 0.70):")
             print(f"      • Threshold: {prec_opt.get('threshold', 0):.4f}")
             print(f"      • Precision: {prec_opt.get('precision', 0):.4f}")
