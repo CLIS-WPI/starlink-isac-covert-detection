@@ -547,8 +547,25 @@ def main():
     with open(save_path, 'wb') as f:
         pickle.dump(merged_dataset, f)
     
-    # Phase 1: Export metadata CSV
-    if num_configs > 1 and 'meta' in merged_dataset and merged_dataset['meta']:
+    # 🔧 FIX: Also save with standard name if total_samples matches
+    # This avoids needing to copy manually
+    if args.total_samples and actual_total == args.total_samples:
+        standard_path = f"{DATASET_DIR}/dataset_{scenario_name}_{args.total_samples}.pkl"
+        if standard_path != save_path:
+            import shutil
+            shutil.copy2(save_path, standard_path)
+            print(f"✅ Also saved as: {standard_path}")
+            # 🔧 CLEANUP: Remove old file to avoid duplicates
+            try:
+                os.remove(save_path)
+                print(f"✅ Removed old file: {os.path.basename(save_path)}")
+            except Exception as e:
+                print(f"⚠️  Could not remove old file: {e}")
+    
+    # Phase 1: Export metadata CSV (optional, for analysis)
+    # 🔧 OPTIONAL: Can be disabled for production to save space
+    export_metadata_csv = True  # Set to False to disable CSV export
+    if export_metadata_csv and num_configs > 1 and 'meta' in merged_dataset and merged_dataset['meta']:
         output_csv = args.output_csv or f"{RESULT_DIR}/dataset_metadata_phase1.csv"
         os.makedirs(os.path.dirname(output_csv), exist_ok=True)
         
@@ -566,7 +583,9 @@ def main():
         if metadata_rows:
             df_meta = pd.DataFrame(metadata_rows)
             df_meta.to_csv(output_csv, index=False)
-            print(f"✅ Phase 1 metadata exported to: {output_csv}")
+            csv_size_mb = os.path.getsize(output_csv) / (1024**2)
+            print(f"✅ Phase 1 metadata exported to: {output_csv} ({csv_size_mb:.2f} MB)")
+            print(f"   Note: This CSV is optional and can be disabled for production")
     
     total_time = time.time() - start_time
     

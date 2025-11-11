@@ -134,7 +134,7 @@ def compute_spectrogram(grids):
     return spectrograms
 
 
-def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False, scenario_name=None):
+def main(use_csi=False, epochs=100, batch_size=512, multi_gpu=False, scenario_name=None):
     # Store scenario_name for later use in saving
     _scenario_name = scenario_name
     """
@@ -593,15 +593,41 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False, scenario_nam
     print("[Phase 4] Training CNN detector...")
     print(f"{'='*70}")
     
+    # 🔧 IMPROVED: Better learning rate for Scenario A (lower for stability)
+    # Scenario A has smaller pattern difference, needs more careful training
+    base_lr = 0.0005  # Reduced from 0.001 for better convergence
+    if scenario_name == 'scenario_a':
+        learning_rate = base_lr  # Lower LR for Scenario A
+    else:
+        learning_rate = 0.001  # Standard LR for Scenario B
+    
+    # 🔧 IMPROVED: Enable band emphasis for Scenario B
+    # This helps model focus on target frequency band (24-39) where pattern is injected
+    emphasize_band = (scenario_name == 'scenario_b')  # Only for Scenario B
+    # 🔧 Option: Use mask (zero outside band) for strongest focus, or emphasis (3.0x/0.3x) for softer
+    # 🔧 ACTIVE: Mask enabled for Scenario B to force model focus on pattern band
+    mask_outside_band = (scenario_name == 'scenario_b')  # Enable mask for Scenario B (strongest approach)
+    
     detector = CNNDetector(
         use_csi=use_csi,
-        learning_rate=0.001,
+        learning_rate=learning_rate,
         dropout_rate=0.3,
         random_state=GLOBAL_SEED,
         use_focal_loss=USE_FOCAL_LOSS,
         focal_gamma=FOCAL_LOSS_GAMMA,
-        focal_alpha=FOCAL_LOSS_ALPHA
+        focal_alpha=FOCAL_LOSS_ALPHA,
+        emphasize_band=emphasize_band,
+        target_band=(24, 40),  # Subcarriers 24-39
+        mask_outside_band=mask_outside_band
     )
+    
+    if emphasize_band:
+        if mask_outside_band:
+            print(f"  ✓ Band mask enabled: only subcarriers 24-39 kept, others zeroed")
+        else:
+            print(f"  ✓ Band emphasis enabled: subcarriers 24-39 (3.0x), others (0.3x)")
+    
+    print(f"  ✓ Learning rate: {learning_rate} ({'reduced for Scenario A' if scenario_name == 'scenario_a' else 'standard'})")
     
     # Train with validation split
     val_size = 0.2
@@ -627,12 +653,17 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False, scenario_nam
     print(f"   Attack power: {np.mean(np.abs(X_tr[y_tr==1])):.6f}")
     print(f"   Benign power: {np.mean(np.abs(X_tr[y_tr==0])):.6f}")
     
+    # 🔧 IMPROVED: Enable class weights for better handling of class imbalance
+    # CNNDetector.train() auto-computes balanced class weights if class_weight=None
+    # This helps when one class is slightly more difficult to learn
+    # Pass None to enable automatic balanced weight computation
     history = detector.train(
         X_tr, y_tr, X_csi_train=X_csi_tr,
         X_val=X_val, y_val=y_val, X_csi_val=X_csi_val,
         epochs=epochs,
         batch_size=batch_size,
-        verbose=1
+        verbose=1,
+        class_weight=None  # Auto-compute balanced weights (handled by CNNDetector)
     )
     
     # ===== Phase 5: Evaluate on Test Set =====
@@ -672,6 +703,45 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False, scenario_nam
     
     results['metrics'] = metrics
     results['success'] = True
+    
+    # 🔧 IMPROVED: Add configuration snapshot for reproducibility
+    try:
+        import hashlib
+        from config import settings
+        
+        # Get key settings
+        config_snapshot = {
+            'insider_mode': getattr(settings, 'INSIDER_MODE', 'unknown'),
+            'covert_amp': getattr(settings, 'COVERT_AMP', 'unknown'),
+            'power_preserving': getattr(settings, 'POWER_PRESERVING_COVERT', 'unknown'),
+            'num_samples_per_class': getattr(settings, 'NUM_SAMPLES_PER_CLASS', 'unknown'),
+            'num_satellites': getattr(settings, 'NUM_SATELLITES_FOR_TDOA', 'unknown'),
+        }
+        
+        # Get git commit hash if available
+        git_commit = None
+        try:
+            import subprocess
+            git_result = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                capture_output=True, text=True, timeout=5
+            )
+            if git_result.returncode == 0:
+                git_commit = git_result.stdout.strip()
+        except:
+            pass
+        
+        results['config_snapshot'] = config_snapshot
+        if git_commit:
+            results['git_commit'] = git_commit
+        
+        # Compute settings hash for quick comparison
+        settings_str = json.dumps(config_snapshot, sort_keys=True)
+        settings_hash = hashlib.md5(settings_str.encode()).hexdigest()[:8]
+        results['config_hash'] = settings_hash
+        
+    except Exception as e:
+        print(f"  ⚠️  Warning: Could not capture config snapshot: {e}")
     
     # ===== Phase 6: Save Model =====
     print(f"\n{'='*70}")
@@ -745,7 +815,13 @@ def main(use_csi=False, epochs=50, batch_size=512, multi_gpu=False, scenario_nam
     print("📋 PIPELINE SUMMARY")
     print(f"{'='*70}")
     print(f"  Dataset:        {NUM_SAMPLES_PER_CLASS * 2} samples")
-    print(f"  Scenario:       {INSIDER_MODE} (insider@{'satellite' if INSIDER_MODE=='sat' else 'ground'})")
+    # 🔧 FIX: Use scenario_name to determine scenario mode (not INSIDER_MODE from settings)
+    if _scenario_name is None:
+        from config.settings import INSIDER_MODE
+        scenario_mode_for_summary = INSIDER_MODE
+    else:
+        scenario_mode_for_summary = 'sat' if _scenario_name == 'scenario_a' else 'ground'
+    print(f"  Scenario:       {scenario_mode_for_summary} (insider@{'satellite' if scenario_mode_for_summary=='sat' else 'ground'})")
     print(f"  Injection:      pre-channel")
     print(f"  Power-preserving: {'on' if POWER_PRESERVING_COVERT else 'off'}")
     print(f"  Detector:       CNN{'+CSI' if use_csi else ''}")
@@ -774,8 +850,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='CNN-based covert channel detection')
     parser.add_argument('--use-csi', action='store_true',
                        help='Enable CSI fusion (multi-modal)')
-    parser.add_argument('--epochs', type=int, default=50,
-                       help='Number of training epochs (default: 50)')
+    parser.add_argument('--epochs', type=int, default=100,
+                       help='Number of training epochs (default: 100)')
     parser.add_argument('--batch-size', type=int, default=512,
                        help='Training batch size (default: 512 for H100)')
     parser.add_argument('--multi-gpu', action='store_true',

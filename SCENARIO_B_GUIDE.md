@@ -1,295 +1,120 @@
-# Scenario B — Insider@Ground (Uplink → Relay → Downlink) — Execution Guide
+# Scenario B — Dual-hop Uplink-Relay-Downlink (Insider@Ground) — Execution Guide
 
-## 📋 Prerequisites
+## 📋 Overview
 
-✅ Ensure that `INSIDER_MODE = 'ground'` in `config/settings.py`.
+Scenario B represents a **dual-hop communication** scenario where:
+- **Insider location**: Ground station
+- **Path**: Uplink → Relay → Downlink
+- **Challenge**: Significant signal attenuation and channel distortion
+- **Solution**: MMSE Equalization (EQ) to recover the covert pattern
 
-```python
-# config/settings.py
-INSIDER_MODE = 'ground'  # ✅ For Scenario B
-```
+## 🚀 Quick Start
 
-## 🔄 Differences from Scenario A
+### Option 1: Complete Pipeline (Recommended)
 
-| Feature | Scenario A (Satellite) | Scenario B (Ground) |
-|--------|------------------------|---------------------|
-| **Injection Point** | Satellite downlink | Ground terminal uplink |
-| **Signal Path** | Direct downlink | Uplink → Relay → Downlink |
-| **Channel Effects** | Single channel | Dual-hop (uplink + downlink) |
-| **Doppler** | Single Doppler | Independent Dopplers (UL/DL) |
-| **Relay** | N/A | AF relay with AGC (gain 0.5-2.0) |
-| **Delay** | N/A | Processing delay (3-5 samples) |
-| **Equalization** | N/A | MMSE equalization (LMMSE CSI) |
-| **Expected AUC** | ~1.0 (CNN-only) | ~0.99 (CNN-only with MMSE) |
-| **Pattern Preservation** | N/A | 0.4-0.5 (with MMSE) |
-| **SNR Improvement** | N/A | 5-15 dB (after MMSE) |
-
-## 🚀 Execution Commands
-
-### Step 1: Generate Dataset
+Run the complete pipeline with a single command:
 
 ```bash
-python3 generate_dataset_parallel.py \
-  --scenario ground \
-  --total-samples 4000 \
-  --snr-list="-5,0,5,10,15,20" \
-  --covert-amp-list="0.1,0.3,0.5,0.7" \
-  --doppler-scale-list="0.5,1.0,1.5" \
-  --pattern="fixed,random" \
-  --subband="mid,random16" \
-  --samples-per-config 80
+python3 run_scenario_b.py
 ```
 
-**Explanation:**
-- `--scenario ground`: Scenario B (ground insider)
-- `--total-samples 4000`: 4000 total samples (2000 per class)
-- `--snr-list`: SNR range from -5 to 20 dB
-- `--covert-amp-list`: Covert amplitude range (0.1 to 0.7)
-- `--doppler-scale-list`: Doppler scale factors
-- `--pattern`: Fixed or random patterns
-- `--subband`: Middle band (24-39) or random 16 subcarriers
-- `--samples-per-config`: 80 samples per configuration
-- Dataset saved to `dataset/dataset_scenario_b_*.pkl` (auto-named)
-- **MMSE Equalization**: Automatically applied during dataset generation
+This will:
+1. Generate dataset (5000 samples with EQ)
+2. Train CNN model (100 epochs)
+3. Generate final report
 
-**Phase 6 Features:**
-- ✅ Dual-hop architecture (uplink → relay → downlink)
-- ✅ Independent Dopplers (`fd_ul` and `fd_dl`)
-- ✅ AF relay with AGC (gain limits 0.5-2.0)
-- ✅ Processing delay (3-5 samples)
-- ✅ MMSE equalization with LMMSE CSI estimation
-- ✅ SNR improvement tracking (5-15 dB gain)
+**Time**: ~1-2 hours
 
-**Approximate time:** ~20-25 minutes (depending on GPU, includes MMSE processing)
+### Option 2: Manual Steps
 
----
-
-### Step 2: Validate Dataset (Optional but Recommended)
+#### Step 1: Generate Dataset
 
 ```bash
-# General dataset validation (auto-detects latest dataset)
-python3 validate_dataset.py
-
-# Or specify dataset explicitly
-python3 validate_dataset.py --dataset dataset/dataset_scenario_b_10k.pkl
+python3 generate_dataset_parallel.py --scenario ground --total-samples 5000
 ```
 
-**Auto-Detection Feature:**
-- ✅ Script automatically finds the latest `dataset_scenario_b*.pkl` file
-- ✅ No need to specify dataset path manually
-- ✅ If provided path doesn't exist, falls back to latest dataset
+**Expected output:**
+- `dataset/dataset_scenario_b_5000.pkl`
+- Size: ~100-120 MB
+- Contains equalized `rx_grids` (post-channel with MMSE EQ)
 
-**Expected:**
-- ✅ Power diff < 5%
-- ✅ Pattern boost in subcarriers 24-39 (or random 16)
-- ✅ Doppler non-zero and reasonable (independent UL/DL)
-- ✅ Labels: 50/50 split
-- ✅ Insider mode: 'ground'
-- ✅ Phase 6 metadata present: `fd_ul`, `fd_dl`, `G_r_mean`, `delay_samples`, `eq_snr_improvement_db`
-- ✅ Normalization leakage check passed
-
----
-
-### Step 3: Train CNN-only
+#### Step 2: Train Model
 
 ```bash
-python3 main_detection_cnn.py \
-  --scenario ground \
-  --epochs 50 \
-  --batch-size 512
+python3 main_detection_cnn.py --scenario ground --epochs 100 --batch-size 512
 ```
 
-**Explanation:**
-- `--scenario ground`: Scenario B (ground insider)
-- `--epochs 50`: Maximum 50 epochs (with early stopping)
-- `--batch-size 512`: Optimized for H100 GPU
-- **Auto-detects latest dataset**: Script finds latest `dataset_scenario_b*.pkl`
-- **Uses equalized signals**: Dataset contains MMSE-equalized `rx_grids`
-- Results in `result/scenario_b/detection_results_cnn.json`
-- Model in `model/scenario_b/cnn_detector.keras`
-
-**Note:** The CNN trains on MMSE-equalized signals, which significantly improves pattern preservation and detection performance.
-
-**Approximate time:** ~2-3 minutes
-
----
-
-### Step 4: Train CNN+CSI (Optional)
-
-```bash
-python3 main_detection_cnn.py \
-  --scenario ground \
-  --use-csi \
-  --epochs 50 \
-  --batch-size 512
-```
-
-**Explanation:**
-- `--scenario ground`: Scenario B (ground insider)
-- `--use-csi`: Enable CSI fusion (real/imag channels)
-- Results in `result/scenario_b/detection_results_cnn_csi.json`
-- Model in `model/scenario_b/cnn_detector_csi.keras`
-
-**Note:** CNN-only with MMSE equalization achieves excellent results (AUC = 0.9917), CSI fusion is optional for future work.
-
-**Approximate time:** ~3-5 minutes
-
----
-
-### Step 5: Run Baselines (Optional)
-
-```bash
-# Run baselines (auto-detects latest dataset)
-python3 detector_baselines.py
-
-# Or specify dataset explicitly
-python3 detector_baselines.py --dataset dataset/dataset_scenario_b_10k.pkl
-```
-
-**Auto-Detection Feature:**
-- ✅ Script automatically finds the latest `dataset_scenario_b*.pkl` file
-- ✅ Results saved to `result/baselines_scenario_b.csv`
-
-### Step 6: Review Results
-
-```bash
-# View CNN-only results
-cat result/scenario_b/detection_results_cnn.json | jq '.metrics'
-
-# View CNN+CSI results (if trained)
-cat result/scenario_b/detection_results_cnn_csi.json | jq '.metrics'
-
-# View baselines
-cat result/baselines_scenario_b.csv
-
-# View meta log (per-sample metadata)
-head result/scenario_b/run_meta_log.csv
-
-# Check Phase 6 metadata (SNR improvement, delay, gain)
-python3 -c "import pickle; d=pickle.load(open('dataset/dataset_scenario_b_10k.pkl','rb')); print('SNR improvement:', d['scenario_b_meta'].get('eq_snr_improvement_db', 'N/A'))"
-```
-
----
+**Expected output:**
+- `model/scenario_b/cnn_detector.keras`
+- `result/scenario_b/detection_results_cnn.json`
 
 ## 📊 Expected Results
 
-Based on Phase 6 implementation with MMSE equalization:
+### Dataset Metrics
+- **Total samples**: 5000 (2500 benign, 2500 attack)
+- **EQ Performance**:
+  - Mean SNR Improvement: ~30-40 dB
+  - Median Pattern Preservation: ~0.48-0.52
+- **Power Difference**: < 0.1% (Ultra-covert)
 
-### CNN-only (with MMSE):
-- **AUC:** ~0.9917 ✅ (excellent, close to Scenario A)
-- **Precision:** ~0.95+
-- **Recall:** ~0.95+
-- **F1 Score:** ~0.95+
+### Detection Performance
+- **AUC**: ≥ 0.90 (typically ~0.95-0.99)
+- **Precision**: ≥ 0.85
+- **Recall**: ≥ 0.90
+- **F1 Score**: ≥ 0.87
 
-### Physical Metrics:
-- **Power diff:** ~0.12% (ultra-covert) ✅
-- **Pattern Preservation:** 0.4-0.5 (with MMSE equalization) ✅
-- **SNR Improvement:** 5-15 dB (after MMSE) ✅
-- **Doppler (UL):** Independent from DL
-- **Doppler (DL):** Independent from UL
-- **Relay Gain:** 0.5-2.0 (AGC controlled)
-- **Relay Delay:** 3-5 samples
+## 🔍 Key Differences from Scenario A
 
-### Technical Notes:
-- **MMSE Equalization**: Significantly improves pattern preservation and detection performance
-- **Dual-hop Architecture**: More challenging than Scenario A, but MMSE compensates
-- **Independent Dopplers**: Realistic modeling of separate uplink and downlink channels
+| Feature | Scenario A | Scenario B |
+|---------|-----------|-----------|
+| **Hop count** | Single-hop | Dual-hop |
+| **Insider location** | Satellite | Ground |
+| **Channel** | Direct downlink | Uplink + Relay + Downlink |
+| **EQ required** | No | Yes (MMSE) |
+| **SNR** | Higher | Lower (needs EQ) |
+| **Expected AUC** | ~0.70 | ~0.95 |
 
----
+## 📁 Output Files
 
-## 📁 Output File Structure
+After running the pipeline:
 
 ```
-result/scenario_b/
-├── detection_results_cnn.json      # CNN-only results
-├── detection_results_cnn_csi.json   # CNN+CSI results
-├── run_meta_log.csv                 # Meta log CNN-only
-└── run_meta_log_csi.csv             # Meta log CNN+CSI
+dataset/
+  └── dataset_scenario_b_5000.pkl          # Generated dataset
 
 model/scenario_b/
-├── cnn_detector.keras               # CNN-only model
-└── cnn_detector_csi.keras           # CNN+CSI model
+  ├── cnn_detector.keras                    # Trained model
+  └── cnn_detector_norm.pkl                # Normalization stats
+
+result/scenario_b/
+  ├── detection_results_cnn.json          # Results (metrics, config)
+  └── run_meta_log.csv                     # Training metadata
 ```
 
----
+## 🔧 Troubleshooting
 
-## 🔄 Comparison with Scenario A
+### Issue: Dataset generation takes too long
+- **Cause**: EQ processing is computationally intensive
+- **Solution**: Reduce samples for testing (e.g., `--total-samples 1000`)
 
-After executing Scenario B, you can compare results:
+### Issue: Low AUC (< 0.80)
+- **Check**: Verify EQ performance in metadata
+  - `eq_snr_improvement_db` should be ≥ 30 dB
+  - `eq_pattern_preservation` should be ≥ 0.45
+- **Solution**: Regenerate dataset or check EQ parameters
 
-```bash
-# Compare AUC
-echo "Scenario A - CNN-only:"
-cat result/scenario_a/detection_results_cnn.json | jq '.metrics.auc'
-echo "Scenario B - CNN-only:"
-cat result/scenario_b/detection_results_cnn.json | jq '.metrics.auc'
+### Issue: Out of memory
+- **Solution**: Reduce batch size: `--batch-size 256`
 
-echo "Scenario A - CNN+CSI:"
-cat result/scenario_a/detection_results_cnn_csi.json | jq '.metrics.auc'
-echo "Scenario B - CNN+CSI:"
-cat result/scenario_b/detection_results_cnn_csi.json | jq '.metrics.auc'
-```
+## 📝 Notes
 
----
+- **EQ is critical**: Scenario B requires MMSE equalization to recover the pattern
+- **Dataset size**: Larger than Scenario A due to CSI storage (`complex64`)
+- **Training time**: Longer due to more complex channel conditions
 
-## ⚠️ Important Notes
-
-1. **Normalization:** mean/std computed only from train data (no data leakage) ✅
-2. **Injection Location:** Subcarriers 24-39 (middle band) or random 16 ✅
-3. **Power Preserving:** `POWER_PRESERVING_COVERT = True` ✅
-4. **MMSE Equalization:** Applied during dataset generation, stored in `rx_grids` ✅
-5. **Phase 6 Complete:**
-   - Dual-hop architecture (uplink → relay → downlink) ✅
-   - Independent Dopplers (`fd_ul` and `fd_dl`) ✅
-   - AF relay with AGC (gain 0.5-2.0) ✅
-   - Processing delay (3-5 samples) ✅
-   - MMSE equalization with LMMSE CSI estimation ✅
-6. **Auto-Detection:** Scripts automatically find latest dataset ✅
-
----
-
-## 🐛 Troubleshooting
-
-If AUC is low (< 0.90):
-
-1. Check that `INSIDER_MODE = 'ground'`
-2. Check that MMSE equalization is applied (check dataset metadata)
-3. Verify Phase 6 metadata exists: `fd_ul`, `fd_dl`, `eq_snr_improvement_db`
-4. Check pattern preservation (should be 0.4-0.5 with MMSE)
-5. Rebuild the dataset with MMSE equalization
-6. Run `validate_dataset.py` to check dataset integrity
-7. Check that latest dataset is being used (auto-detection)
-
-**Note:** With MMSE equalization, Scenario B should achieve AUC ≥ 0.99. If not, check:
-- CSI estimation quality (LMMSE should be used)
-- SNR improvement metrics (should show 5-15 dB gain)
-- Pattern preservation (should be 0.4-0.5)
-
----
-
-## 🚀 Complete Pipeline (Automated)
-
-For automated execution of all steps:
-
-```bash
-# Run complete pipeline for Scenario B
-./run_complete_pipeline.sh
-```
-
-This script:
-1. Generates dataset for Scenario B (with MMSE equalization)
-2. Validates dataset (auto-detects latest)
-3. Trains CNN (auto-detects latest dataset)
-4. Runs baselines (auto-detects latest dataset)
-
-**Note:** The script handles both Scenario A and B sequentially. To run only Scenario B, modify the script or use individual commands above.
-
-## ✅ Ready for Paper
+## 🎯 Next Steps
 
 After successful execution:
-- ✅ Results stored in `result/scenario_b/`
-- ✅ Models stored in `model/scenario_b/`
-- ✅ Phase 6 metadata stored in dataset
-- ✅ MMSE equalization applied and validated
-- ✅ Completely separate from Scenario A
-- ✅ Ready for comparison and use in paper
+1. Review results in `result/scenario_b/detection_results_cnn.json`
+2. Compare with Scenario A results
+3. Generate paper figures (ROC curves, etc.)

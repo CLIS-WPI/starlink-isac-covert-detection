@@ -48,7 +48,8 @@ class CNNDetector:
     
     def __init__(self, use_csi=False, input_shape=None, csi_shape=None, 
                  learning_rate=0.001, dropout_rate=0.3, random_state=42,
-                 use_focal_loss=False, focal_gamma=2.0, focal_alpha=0.25):
+                 use_focal_loss=False, focal_gamma=2.0, focal_alpha=0.25,
+                 emphasize_band=True, target_band=(24, 40), mask_outside_band=False):
         """
         Initialize CNN detector.
         
@@ -67,6 +68,9 @@ class CNNDetector:
         self.input_shape = input_shape
         self.csi_shape = csi_shape
         self.learning_rate = learning_rate
+        self.emphasize_band = emphasize_band
+        self.target_band = target_band
+        self.mask_outside_band = mask_outside_band
         self.dropout_rate = dropout_rate
         self.random_state = random_state
         self.use_focal_loss = use_focal_loss
@@ -357,7 +361,15 @@ class CNNDetector:
         
         return model
     
-    def _preprocess_ofdm(self, X_grids):
+    def _preprocess_ofdm(self, X_grids, emphasize_band=True, target_band=(24, 40), mask_outside_band=False):
+        """
+        Preprocess OFDM grids for CNN input.
+        
+        Args:
+            X_grids: OFDM grids (complex)
+            emphasize_band: If True, emphasize target frequency band (24-39) for Scenario B
+            target_band: (start, end) subcarrier indices for band emphasis
+        """
         """
         Preprocess OFDM grids: extract magnitude and phase.
         
@@ -392,6 +404,34 @@ class CNNDetector:
         # Extract magnitude and phase
         magnitude = np.abs(X_grids)  # (N, symbols, subcarriers)
         phase = np.angle(X_grids)    # (N, symbols, subcarriers)
+        
+        # 🔧 IMPROVED: Band emphasis for Scenario B
+        # Emphasize target frequency band (24-39) to help model focus on pattern
+        if emphasize_band and magnitude.shape[-1] >= target_band[1]:
+            band_start, band_end = target_band
+            
+            if mask_outside_band:
+                # 🔧 STRONGEST: Mask outside band completely (only keep target band)
+                # This forces model to focus exclusively on the pattern band
+                band_mask = np.zeros(magnitude.shape[-1], dtype=np.float32)
+                band_mask[band_start:band_end] = 1.0  # Only keep target band
+                magnitude = magnitude * band_mask[np.newaxis, np.newaxis, :]
+                
+                if debug_mode:
+                    print(f"      Applied BAND MASK: only subcarriers {band_start}-{band_end} kept, others zeroed")
+            else:
+                # 🔧 STRONGER: Increased emphasis for better pattern visibility
+                # Create mask: 3.0x weight for target band, 0.3x for others (stronger contrast)
+                band_mask = np.ones(magnitude.shape[-1], dtype=np.float32)
+                band_mask[band_start:band_end] = 3.0  # Strong emphasis on target band
+                band_mask[:band_start] = 0.3  # Strongly reduce weight outside band
+                band_mask[band_end:] = 0.3  # Strongly reduce weight outside band
+                
+                # Apply mask to magnitude (broadcast across all dimensions)
+                magnitude = magnitude * band_mask[np.newaxis, np.newaxis, :]
+                
+                if debug_mode:
+                    print(f"      Applied STRONG band emphasis: {band_start}-{band_end} (3.0x), others (0.3x)")
         
         # Stack as channels: (N, symbols, subcarriers, 2)
         X_processed = np.stack([magnitude, phase], axis=-1).astype(np.float32)
@@ -554,7 +594,7 @@ class CNNDetector:
         
         # 🔧 FIX: Preprocess train data FIRST to compute and store normalization stats
         # This ensures validation/test use train statistics (no data leakage)
-        X_train_proc = self._preprocess_ofdm(X_train)
+        X_train_proc = self._preprocess_ofdm(X_train, emphasize_band=self.emphasize_band, target_band=self.target_band, mask_outside_band=self.mask_outside_band)
         
         # Auto-detect input shape
         if self.input_shape is None:
@@ -587,7 +627,7 @@ class CNNDetector:
         if X_val is not None and y_val is not None:
             # At this point, normalization stats are already computed from train data
             # So validation will use train statistics (correct!)
-            X_val_proc = self._preprocess_ofdm(X_val)
+            X_val_proc = self._preprocess_ofdm(X_val, emphasize_band=self.emphasize_band, target_band=self.target_band, mask_outside_band=self.mask_outside_band)
             if self.use_csi and X_csi_val is not None:
                 X_csi_val_proc = self._preprocess_csi(X_csi_val)
                 validation_data = ([X_val_proc, X_csi_val_proc], y_val)
@@ -657,7 +697,7 @@ class CNNDetector:
             raise RuntimeError("Model not trained! Call train() first.")
         
         # Preprocess
-        X_test_proc = self._preprocess_ofdm(X_test)
+        X_test_proc = self._preprocess_ofdm(X_test, emphasize_band=self.emphasize_band, target_band=self.target_band, mask_outside_band=self.mask_outside_band)
         
         if self.use_csi and X_csi_test is not None:
             X_csi_test_proc = self._preprocess_csi(X_csi_test)
@@ -688,7 +728,7 @@ class CNNDetector:
             raise RuntimeError("Model not trained! Call train() first.")
         
         # Preprocess
-        X_test_proc = self._preprocess_ofdm(X_test)
+        X_test_proc = self._preprocess_ofdm(X_test, emphasize_band=self.emphasize_band, target_band=self.target_band, mask_outside_band=self.mask_outside_band)
         
         if self.use_csi and X_csi_test is not None:
             X_csi_test_proc = self._preprocess_csi(X_csi_test)
@@ -786,6 +826,49 @@ class CNNDetector:
             y_test, preds, average='binary', zero_division=0
         )
         
+        # 🔧 IMPROVED: Compute dual thresholds (F1-optimal and Precision-oriented)
+        # This provides two operating points for production use
+        dual_thresholds = {}
+        if X_val is not None and y_val is not None:
+            val_probs = self.predict_proba(X_val, X_csi_val)
+            
+            # F1-optimal (already computed)
+            dual_thresholds['f1_optimal'] = {
+                'threshold': threshold,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1
+            }
+            
+            # Precision-oriented (target Precision ≈ 0.70)
+            best_prec_threshold = threshold
+            best_prec_metrics = {'precision': precision, 'recall': recall, 'f1': f1}
+            for test_threshold in np.arange(0.5, 0.95, 0.01):
+                test_preds = (val_probs >= test_threshold).astype(int)
+                test_prec, test_rec, test_f1, _ = precision_recall_fscore_support(
+                    y_val, test_preds, average='binary', zero_division=0
+                )
+                if test_prec >= 0.70 and test_rec > best_prec_metrics['recall']:
+                    best_prec_threshold = test_threshold
+                    best_prec_metrics = {
+                        'precision': test_prec,
+                        'recall': test_rec,
+                        'f1': test_f1
+                    }
+            
+            # Compute test metrics with precision-oriented threshold
+            prec_preds = (probs >= best_prec_threshold).astype(int)
+            prec_precision, prec_recall, prec_f1, _ = precision_recall_fscore_support(
+                y_test, prec_preds, average='binary', zero_division=0
+            )
+            
+            dual_thresholds['precision_oriented'] = {
+                'threshold': float(best_prec_threshold),
+                'precision': float(prec_precision),
+                'recall': float(prec_recall),
+                'f1': float(prec_f1)
+            }
+        
         metrics = {
             'auc': auc,
             'precision': precision,
@@ -793,6 +876,9 @@ class CNNDetector:
             'f1': f1,
             'threshold': threshold
         }
+        
+        if dual_thresholds:
+            metrics['dual_thresholds'] = dual_thresholds
         
         return metrics
     
