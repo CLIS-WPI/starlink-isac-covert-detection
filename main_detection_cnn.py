@@ -534,9 +534,14 @@ def main(use_csi=False, epochs=100, batch_size=512, multi_gpu=False, scenario_na
     print("[Phase 2.5] Pattern Injection Verification...")
     print(f"{'='*70}")
     
+    # Make sure both arrays have same size (handle imbalance from multiprocessing)
+    min_samples = min(len(attack_grids), len(benign_grids))
+    attack_grids_balanced = attack_grids[:min_samples]
+    benign_grids_balanced = benign_grids[:min_samples]
+    
     # Calculate mean absolute difference between attack and benign
-    mean_abs_diff = np.mean(np.abs(attack_grids - benign_grids))
-    max_abs_diff = np.max(np.abs(attack_grids - benign_grids))
+    mean_abs_diff = np.mean(np.abs(attack_grids_balanced - benign_grids_balanced))
+    max_abs_diff = np.max(np.abs(attack_grids_balanced - benign_grids_balanced))
     
     print(f"  ✓ Mean abs difference: {mean_abs_diff:.6f}")
     print(f"  ✓ Max abs difference:  {max_abs_diff:.6f}")
