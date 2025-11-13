@@ -1,0 +1,75 @@
+% Pseudocode for CNN-based Covert Channel Detection
+% Uses algorithm2e package (standard in LaTeX)
+
+\begin{algorithm}[t]
+\caption{CNN-Based Covert Channel Detection with Cross-Validation}
+\label{alg:detection}
+\SetAlgoLined
+\KwIn{Dataset $\mathcal{D} = \{(X_i, y_i)\}_{i=1}^{N}$ with $N=10,000$ samples, 
+      number of folds $K=5$, CNN architecture $\mathcal{A}$, 
+      training hyperparameters $\theta$}
+\KwOut{Detection performance metrics: AUC, Precision, Recall, F1 (mean $\pm$ std)}
+
+\BlankLine
+\textbf{Preprocessing:}
+\BlankLine
+Normalize resource grids: $X_i \leftarrow \frac{X_i - \mu}{\sigma}$ where $\mu, \sigma$ computed on training set only\;
+Convert complex-valued grids to magnitude: $X_i \leftarrow |X_i|$ if $\text{iscomplex}(X_i)$\;
+\BlankLine
+\textbf{Cross-Validation:}
+\BlankLine
+Split $\mathcal{D}$ into $K=5$ stratified folds: $\{\mathcal{D}_1, \ldots, \mathcal{D}_K\}$\;
+Initialize metrics arrays: $\text{AUC} \leftarrow [], \text{Prec} \leftarrow [], \text{Rec} \leftarrow [], \text{F1} \leftarrow []$\;
+\BlankLine
+\For{$k = 1$ \KwTo $K$}{
+    \BlankLine
+    \textbf{Data Partitioning:}
+    \BlankLine
+    $\mathcal{D}_{\text{val}} \leftarrow \mathcal{D}_k$ \tcp{Validation fold}
+    $\mathcal{D}_{\text{train}} \leftarrow \bigcup_{j \neq k} \mathcal{D}_j$ \tcp{Remaining folds}
+    \BlankLine
+    \textbf{Model Training:}
+    \BlankLine
+    Initialize CNN model: $f_\theta \leftarrow \text{CNN}(\mathcal{A})$\;
+    \For{epoch $= 1$ \KwTo $\text{max\_epochs}$}{
+        \For{batch $(X_b, y_b) \in \mathcal{D}_{\text{train}}$}{
+            Compute loss: $\mathcal{L} \leftarrow \text{FocalLoss}(f_\theta(X_b), y_b)$\;
+            Update parameters: $\theta \leftarrow \theta - \alpha \nabla_\theta \mathcal{L}$\;
+        }
+        Evaluate on $\mathcal{D}_{\text{val}}$: $\text{val\_auc} \leftarrow \text{AUC}(f_\theta(\mathcal{D}_{\text{val}}))$\;
+        \If{$\text{val\_auc}$ not improving for $\text{patience}$ epochs}{
+            \textbf{break} \tcp{Early stopping}
+        }
+    }
+    \BlankLine
+    \textbf{Evaluation:}
+    \BlankLine
+    Compute predictions: $\hat{y}_i \leftarrow f_\theta(X_i)$ for $(X_i, y_i) \in \mathcal{D}_{\text{val}}$\;
+    Compute metrics: $\text{auc}_k \leftarrow \text{AUC}(\hat{y}, y)$, 
+                     $\text{prec}_k \leftarrow \text{Precision}(\hat{y}, y)$,
+                     $\text{rec}_k \leftarrow \text{Recall}(\hat{y}, y)$,
+                     $\text{f1}_k \leftarrow \text{F1}(\hat{y}, y)$\;
+    Append to arrays: $\text{AUC}.\text{append}(\text{auc}_k)$, 
+                      $\text{Prec}.\text{append}(\text{prec}_k)$, 
+                      $\text{Rec}.\text{append}(\text{rec}_k)$, 
+                      $\text{F1}.\text{append}(\text{f1}_k)$\;
+}
+\BlankLine
+\textbf{Aggregation:}
+\BlankLine
+Compute mean and standard deviation:
+$\bar{\text{AUC}} \leftarrow \text{mean}(\text{AUC})$, 
+$\sigma_{\text{AUC}} \leftarrow \text{std}(\text{AUC})$\;
+$\bar{\text{Prec}} \leftarrow \text{mean}(\text{Prec})$, 
+$\sigma_{\text{Prec}} \leftarrow \text{std}(\text{Prec})$\;
+$\bar{\text{Rec}} \leftarrow \text{mean}(\text{Rec})$, 
+$\sigma_{\text{Rec}} \leftarrow \text{std}(\text{Rec})$\;
+$\bar{\text{F1}} \leftarrow \text{mean}(\text{F1})$, 
+$\sigma_{\text{F1}} \leftarrow \text{std}(\text{F1})$\;
+\BlankLine
+\Return{$\bar{\text{AUC}} \pm \sigma_{\text{AUC}}$, 
+        $\bar{\text{Prec}} \pm \sigma_{\text{Prec}}$, 
+        $\bar{\text{Rec}} \pm \sigma_{\text{Rec}}$, 
+        $\bar{\text{F1}} \pm \sigma_{\text{F1}}$}
+\end{algorithm}
+

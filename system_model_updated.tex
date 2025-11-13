@@ -1,0 +1,99 @@
+\section{System Model}
+
+\label{sec:system}
+
+\subsection{Communication Model}
+
+\label{subsec:comm}
+
+We adopt a complex baseband, discrete-time, OFDM formulation. Let $m\in\{0,\dots,M-1\}$ index OFDM symbols and $k\in\mathcal{K}=\{-K/2,\dots,K/2-1\}$ index subcarriers. After cyclic-prefix removal and FFT at the receiver, the nominal (benign) input–output relation on the time–frequency grid is
+
+\begin{equation}
+    Y[m,k] \;=\; \sum_{\kappa\in\mathcal{K}} H[m,k,\kappa]\,X[m,\kappa] \;+\; N[m,k],
+    \label{eq:ici}
+\end{equation}
+
+where $X[m,k]$ is the transmitted resource grid, $Y[m,k]$ is the received grid, $N[m,k]\sim\mathcal{CN}(0,\sigma^2)$ is noise, and $H[m,k,\kappa]$ captures linear time-variance (Doppler/ICI): $H[m,k,\kappa]=0$ for $\kappa\neq k$ reduces~\eqref{eq:ici} to the flat-per-subcarrier model $Y[m,k]=H[m,k]X[m,k]+N[m,k]$. The mapping from data/pilots to $X[m,k]$ follows the standard OFDM modulator (subcarrier mapping $\rightarrow$ IFFT $\rightarrow$ cyclic prefix); no assumption on numerology beyond orthogonality.
+
+In our discrete-time simulation framework (Sionna/OpenNTN), we employ block-fading assumptions per subcarrier, where $H[m,k,\kappa]=0$ for $\kappa\neq k$, effectively reducing~\eqref{eq:ici} to $Y[m,k]=H[m,k]X[m,k]+N[m,k]$. Doppler effects are captured via time-varying phase shifts in the channel coefficients $H[m,k]$, modeled using doubly selective LEO fading profiles with realistic Doppler spreads. This simplification maintains computational efficiency while preserving the essential characteristics of LEO satellite channels, including fast time-variation and multipath fading.
+
+Equivalently in continuous time, with $x(t)$ the transmit waveform and $\mathcal{H}\{\cdot\}$ a linear time-varying (LTV) operator with impulse response $h(t,\tau)$ and Doppler $f_D(t)$,
+
+\begin{equation}
+    y(t) \;=\; \mathcal{H}\{x\}(t) \;+\; n(t)
+    \;=\; \int h(t,\tau)\,x(t-\tau)\,d\tau \;+\; n(t),
+\end{equation}
+
+which, under OFDM demodulation, yields~\eqref{eq:ici}.
+
+\subsection{Relay (Dual-Hop) Model}
+
+\label{subsec:relay}
+
+For an amplify-and-forward (AF) relay path (uplink $\rightarrow$ relay $\rightarrow$ downlink), let $H_{\mathrm{UL}}$ and $H_{\mathrm{DL}}$ denote the (possibly ICI-inducing) operators of the uplink and downlink, respectively, and $G_r$ the relay's linear gain/AGC (which may be frequency/time selective). The receive grid obeys
+
+\begin{equation}
+\begin{aligned}
+    Y[m,k] \;=\; \sum_{\kappa} H_{\mathrm{DL}}[m,k,\kappa]\Big(
+    &\, G_r[m,\kappa]\Big( \sum_{\lambda} H_{\mathrm{UL}}[m,\kappa,\lambda]\,X[m,\lambda] \\
+    &\;+\; N_{\mathrm{UL}}[m,\kappa]\Big)\Big) \;+\; N_{\mathrm{DL}}[m,k].
+\end{aligned}
+\label{eq:relay}
+\end{equation}
+
+The single-hop case is recovered by setting $H_{\mathrm{UL}}=\mathbf{I}$, $G_r=1$, and $N_{\mathrm{UL}}=0$.
+
+\subsection{Covert Leakage Injection}
+
+\label{subsec:covert}
+
+A covert emitter forms an augmented transmit grid $X'(m,k)=X(m,k)+S_c(m,k)$, where $S_c$ occupies a sparse time–frequency support. Let $\mathcal{S}_c\subseteq\{0,\dots,M-1\}\times\mathcal{K}$ denote the covert mask and $a[m,k]\in\mathcal{A}$ the covert symbols (e.g., QPSK). Then
+
+\begin{equation}
+    S_c(m,k) \;=\; \beta\, a[m,k]\; \mathbf{1}\!\left\{(m,k)\in\mathcal{S}_c\right\},
+\end{equation}
+
+with $\beta>0$ the (small) embedding amplitude. A power-preservation constraint is enforced pre-channel:
+
+\begin{equation}
+    \big|\mathbb{E}\!\left[\,|X'(m,k)|^2\,\right] - \mathbb{E}\!\left[\,|X(m,k)|^2\,\right]\big| \;\le\; \varepsilon,
+    \label{eq:power_preserve}
+\end{equation}
+
+for a design tolerance $\varepsilon\ll 1$ (fraction of nominal power), ensuring protocol-level power invariance. Pilots and framing remain unaltered; $\mathcal{S}_c$ need not be contiguous and may be deterministic or randomized, but is assumed to avoid pilot REs.
+
+\paragraph{Implementation Parameters}
+Our Sionna-based simulator instantiates this model with $M=10$ OFDM symbols, $K=64$ subcarriers, QPSK modulation with rate-0.5 LDPC coding (codeword length 1024 bits), and covert injection on $|\mathcal{S}_c|=16$ contiguous subcarriers ($k\in\{24,\ldots,39\}$) with amplitude $\beta=0.5$. The injection occupies 7 OFDM symbols following a semi-fixed temporal pattern (symbols $\{1,3,5,7\}$ and additional symbols), resulting in an average power deviation $<0.01\%$ (specifically $0.008\%$ for Scenario~A and $0.009\%$ for Scenario~B). Pilots at symbols $\{2,7\}$ remain unmodified for channel estimation, ensuring that the covert mask $\mathcal{S}_c$ avoids pilot resource elements. This configuration balances detectability (consistent spectral footprint) with stealth (minimal power perturbation).
+
+\subsection{Threat Model}
+
+\label{subsec:threat}
+
+\paragraph*{Goal} Inject a low-rate covert message into the legitimate waveform while remaining statistically hard to detect at the receiver under~\eqref{eq:power_preserve}.
+
+\paragraph*{Knowledge} The adversary knows the waveform format (OFDM numerology, pilot layout) and scheduling metadata, but not instantaneous channel/noise realizations or the receiver's randomization seeds. No control over receiver processing.
+
+\paragraph*{Capabilities} Insider access to a legitimate transmitter path (e.g., satellite payload or ground uplink gateway); ability to superimpose $S_c$ with chosen constellation $\mathcal{A}$, mask $\mathcal{S}_c$, and amplitude $\beta$ subject to~\eqref{eq:power_preserve}. No modification of pilots/frame headers; no jamming or wideband power change.
+
+\paragraph*{Example Attack Instance} For a concrete illustration, consider a compromised satellite payload with insider access. The attacker injects QPSK symbols on 16 contiguous subcarriers (indices 24--39) across 7 OFDM symbols with amplitude $\beta=0.5$, achieving an average power deviation of $<0.01\%$ while exfiltrating approximately 6.4~kbps of covert data (16 subcarriers $\times$ 2 bits/symbol $\times$ 7 symbols $\times$ 15~kHz subcarrier spacing $\times$ duty cycle). This attack remains undetectable by conventional power-based monitoring systems while maintaining full protocol compliance.
+
+\paragraph*{Constraints} (i) Average power deviation bounded by $\varepsilon$ (pre-channel); (ii) Regulatory spectral mask and PAPR limits; (iii) Limited temporal duty cycle; (iv) No manipulation of receiver-side equalization or detection thresholds.
+
+\subsection{Detection Problem}
+
+\label{subsec:detection}
+
+Given observations $Y$ on the resource grid, decide between
+
+\begin{equation}
+\begin{cases}
+\mathcal{H}_0:\; Y = \mathcal{T}\{X\} + N, \\
+\mathcal{H}_1:\; Y = \mathcal{T}\{X+S_c\} + N,
+\end{cases}
+\qquad \mathcal{T}\in\{H,\, (H_{\mathrm{DL}}\!\circ G_r\!\circ H_{\mathrm{UL}})\},
+\end{equation}
+
+where $\mathcal{T}$ denotes the (single- or dual-hop) channel operator and $N$ aggregates noise terms. A detector $\delta:\,Y\mapsto\{0,1\}$ (possibly after linear preprocessing $\tilde{Y}=\mathcal{E}\{Y\}$, e.g., pilot-assisted equalization) should satisfy a prescribed false-alarm level $\mathbb{P}_{\mathcal{H}_0}[\delta(Y)=1]\le\alpha$ while maximizing power under $\mathcal{H}_1$. 
+
+We realize $\delta$ via a convolutional neural network (CNN) that outputs a detection probability $\Pr(\mathcal{H}_1|Y)\in[0,1]$, which is thresholded for binary decision. The CNN architecture, training procedure, and threshold optimization are detailed in Section~\ref{sec:detection}. This formulation is agnostic to the specific test (e.g., energy, GLRT, ML/RF, or deep models) and to the particular choice of $\mathcal{S}_c$, $\mathcal{A}$, or $\beta$ beyond~\eqref{eq:power_preserve}.
+

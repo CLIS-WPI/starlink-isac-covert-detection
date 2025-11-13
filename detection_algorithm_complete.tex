@@ -1,0 +1,128 @@
+% ============================================================================
+% COMPLETE PSEUDOCODE FOR CNN-BASED COVERT CHANNEL DETECTION
+% ============================================================================
+% 
+% USAGE IN OVERLEAF:
+% 1. Add to preamble:
+%    \usepackage[ruled,vlined]{algorithm2e}
+% 
+% 2. Copy the algorithm environment below into your paper
+% 
+% 3. Reference in text: Algorithm~\ref{alg:detection}
+%
+% ============================================================================
+
+% Required package (add to preamble):
+% \usepackage[ruled,vlined]{algorithm2e}
+
+\begin{algorithm}[t]
+\caption{CNN-Based Covert Channel Detection with 5-Fold Cross-Validation}
+\label{alg:detection}
+\SetAlgoLined
+\SetKwInOut{Input}{Input}
+\SetKwInOut{Output}{Output}
+
+\Input{Dataset $\mathcal{D} = \{(X_i, y_i)\}_{i=1}^{N}$ with $N=10,000$ samples, 
+       number of folds $K=5$, CNN architecture $\mathcal{A}$, 
+       training hyperparameters $\theta$ (learning rate $\alpha$, batch size $B$, etc.)}
+\Output{Detection performance metrics: AUC, Precision, Recall, F1 (mean $\pm$ std)}
+
+\BlankLine
+\textbf{Preprocessing:}
+\BlankLine
+Compute normalization statistics on training set only: 
+$\mu \leftarrow \text{mean}(\mathcal{D}_{\text{train}})$, 
+$\sigma \leftarrow \text{std}(\mathcal{D}_{\text{train}})$\;
+Normalize all grids: $X_i \leftarrow (X_i - \mu) / \sigma$ for all $i$\;
+\If{$\text{iscomplex}(X_i)$}{
+    Convert to magnitude: $X_i \leftarrow |X_i|$ \tcp{Handle complex-valued data}
+}
+\BlankLine
+\textbf{Cross-Validation Setup:}
+\BlankLine
+Split $\mathcal{D}$ into $K=5$ stratified folds: $\{\mathcal{D}_1, \ldots, \mathcal{D}_K\}$ 
+maintaining 50/50 class balance\;
+Initialize metrics arrays: $\text{AUC} \leftarrow [], \text{Prec} \leftarrow [], 
+\text{Rec} \leftarrow [], \text{F1} \leftarrow []$\;
+\BlankLine
+\textbf{Cross-Validation Loop:}
+\BlankLine
+\For{$k = 1$ \KwTo $K$}{
+    \BlankLine
+    \textbf{Data Partitioning:}
+    \BlankLine
+    $\mathcal{D}_{\text{val}} \leftarrow \mathcal{D}_k$ \tcp{Validation fold (20\%)}
+    $\mathcal{D}_{\text{train}} \leftarrow \bigcup_{j \neq k} \mathcal{D}_j$ \tcp{Training folds (80\%)}
+    \BlankLine
+    \textbf{Model Initialization:}
+    \BlankLine
+    Initialize CNN model: $f_\theta \leftarrow \text{CNN}(\mathcal{A})$ with architecture:
+    \begin{itemize}
+        \item 4 convolutional blocks (32, 64, 128, 256 filters)
+        \item Spatial attention mechanism
+        \item Global average pooling
+        \item Dense layers (64, 32 units) with dropout ($p=0.3$)
+        \item Sigmoid output layer
+    \end{itemize}
+    \BlankLine
+    \textbf{Training:}
+    \BlankLine
+    \For{epoch $= 1$ \KwTo $\text{max\_epochs}$ (default: 100)}{
+        \For{batch $(X_b, y_b) \in \mathcal{D}_{\text{train}}$ with batch size $B=512$}{
+            Forward pass: $\hat{y}_b \leftarrow f_\theta(X_b)$\;
+            Compute loss: $\mathcal{L} \leftarrow \text{FocalLoss}(\hat{y}_b, y_b; \gamma=2.5, \alpha=0.5)$\;
+            Backward pass: $\nabla_\theta \mathcal{L} \leftarrow \text{gradient}(\mathcal{L})$\;
+            Update parameters: $\theta \leftarrow \theta - \alpha \nabla_\theta \mathcal{L}$ 
+            with Adam optimizer ($\alpha=10^{-3}$)\;
+        }
+        Evaluate on validation set: 
+        $\text{val\_auc} \leftarrow \text{AUC}(f_\theta(\mathcal{D}_{\text{val}}), y_{\text{val}})$\;
+        \If{$\text{val\_auc}$ not improving for $\text{patience}=15$ epochs}{
+            \textbf{break} \tcp{Early stopping}
+        }
+        \If{$\text{val\_auc}$ plateaus}{
+            Reduce learning rate: $\alpha \leftarrow 0.5 \cdot \alpha$ \tcp{LR scheduling}
+        }
+    }
+    \BlankLine
+    \textbf{Evaluation:}
+    \BlankLine
+    Compute predictions: $\hat{y}_i \leftarrow f_\theta(X_i)$ for all $(X_i, y_i) \in \mathcal{D}_{\text{val}}$\;
+    Optimize threshold: $\tau^* \leftarrow \arg\max_\tau \text{F1}(f_\theta(\mathcal{D}_{\text{val}}) > \tau, y_{\text{val}})$\;
+    Compute binary predictions: $\hat{y}_i^{\text{binary}} \leftarrow \mathbf{1}[\hat{y}_i > \tau^*]$\;
+    \BlankLine
+    Compute metrics for fold $k$:
+    \begin{itemize}
+        \item $\text{auc}_k \leftarrow \text{AUC}(\hat{y}, y)$
+        \item $\text{prec}_k \leftarrow \text{Precision}(\hat{y}^{\text{binary}}, y)$
+        \item $\text{rec}_k \leftarrow \text{Recall}(\hat{y}^{\text{binary}}, y)$
+        \item $\text{f1}_k \leftarrow \text{F1}(\hat{y}^{\text{binary}}, y)$
+    \end{itemize}
+    \BlankLine
+    Append to arrays: 
+    $\text{AUC}.\text{append}(\text{auc}_k)$, 
+    $\text{Prec}.\text{append}(\text{prec}_k)$, 
+    $\text{Rec}.\text{append}(\text{rec}_k)$, 
+    $\text{F1}.\text{append}(\text{f1}_k)$\;
+}
+\BlankLine
+\textbf{Aggregation:}
+\BlankLine
+Compute mean and standard deviation across $K$ folds:
+\begin{align*}
+\bar{\text{AUC}} &\leftarrow \frac{1}{K}\sum_{k=1}^{K} \text{auc}_k, \quad
+\sigma_{\text{AUC}} \leftarrow \sqrt{\frac{1}{K-1}\sum_{k=1}^{K}(\text{auc}_k - \bar{\text{AUC}})^2} \\
+\bar{\text{Prec}} &\leftarrow \frac{1}{K}\sum_{k=1}^{K} \text{prec}_k, \quad
+\sigma_{\text{Prec}} \leftarrow \sqrt{\frac{1}{K-1}\sum_{k=1}^{K}(\text{prec}_k - \bar{\text{Prec}})^2} \\
+\bar{\text{Rec}} &\leftarrow \frac{1}{K}\sum_{k=1}^{K} \text{rec}_k, \quad
+\sigma_{\text{Rec}} \leftarrow \sqrt{\frac{1}{K-1}\sum_{k=1}^{K}(\text{rec}_k - \bar{\text{Rec}})^2} \\
+\bar{\text{F1}} &\leftarrow \frac{1}{K}\sum_{k=1}^{K} \text{f1}_k, \quad
+\sigma_{\text{F1}} \leftarrow \sqrt{\frac{1}{K-1}\sum_{k=1}^{K}(\text{f1}_k - \bar{\text{F1}})^2}
+\end{align*}
+\BlankLine
+\Return{$\bar{\text{AUC}} \pm \sigma_{\text{AUC}}$, 
+        $\bar{\text{Prec}} \pm \sigma_{\text{Prec}}$, 
+        $\bar{\text{Rec}} \pm \sigma_{\text{Rec}}$, 
+        $\bar{\text{F1}} \pm \sigma_{\text{F1}}$}
+\end{algorithm}
+

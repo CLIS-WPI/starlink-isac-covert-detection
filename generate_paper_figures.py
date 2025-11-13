@@ -46,9 +46,9 @@ def load_dataset(scenario='sat'):
     for dataset_path in dataset_files:
         if Path(dataset_path).exists():
             print(f"  Loading dataset: {dataset_path}")
-            with open(dataset_path, 'rb') as f:
-                dataset = pickle.load(f)
-            
+    with open(dataset_path, 'rb') as f:
+        dataset = pickle.load(f)
+    
             rx_grids = np.array(dataset['rx_grids'])
             labels = np.array(dataset['labels'])
             
@@ -388,7 +388,7 @@ def plot_roc_curves(output_dir='figures'):
             print(f"  ✅ CNN: AUC={auc_cnn:.4f} (from stored results)")
         except Exception as e:
             print(f"  ⚠️  CNN failed: {e}")
-        
+    
         # Plot ROC curves
         for method, data in methods.items():
             if isinstance(data, dict) and 'approximate' in data:

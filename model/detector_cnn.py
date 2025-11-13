@@ -49,7 +49,8 @@ class CNNDetector:
     def __init__(self, use_csi=False, input_shape=None, csi_shape=None, 
                  learning_rate=0.001, dropout_rate=0.3, random_state=42,
                  use_focal_loss=False, focal_gamma=2.0, focal_alpha=0.25,
-                 emphasize_band=True, target_band=(24, 40), mask_outside_band=False):
+                 emphasize_band=True, target_band=(24, 40), mask_outside_band=False,
+                 use_attention=True):
         """
         Initialize CNN detector.
         
@@ -63,6 +64,7 @@ class CNNDetector:
             use_focal_loss: Use focal loss instead of binary crossentropy
             focal_gamma: Focal loss gamma (focus on hard examples)
             focal_alpha: Focal loss alpha (class weight)
+            use_attention: Whether to use attention mechanism (default: True)
         """
         self.use_csi = use_csi
         self.input_shape = input_shape
@@ -76,6 +78,7 @@ class CNNDetector:
         self.use_focal_loss = use_focal_loss
         self.focal_gamma = focal_gamma
         self.focal_alpha = focal_alpha
+        self.use_attention = use_attention
         
         self.model = None
         self.is_trained = False
@@ -143,33 +146,35 @@ class CNNDetector:
         x = layers.BatchNormalization(name=f"{name_prefix}_bn3")(x)
         x = layers.Activation('relu', name=f"{name_prefix}_act3")(x)
         
-        # 🔧 TEST 8: Enhanced attention for subcarrier pattern detection
-        # This helps focus on frequencies where covert injection occurs (24-39)
-        # Use channel-wise attention to emphasize important subcarriers
-        attention_conv = layers.Conv2D(1, (1, 1), activation='sigmoid', 
-                                       name=f"{name_prefix}_attention")(x)
-        x = layers.Multiply(name=f"{name_prefix}_attn_mult")([x, attention_conv])
-        
-        # 🔧 TEST 8: Add frequency-domain attention (focus on subcarriers 24-39)
-        # Compute attention weights per subcarrier (frequency dimension)
-        # This helps the model focus on the target frequency band
-        # Get current shape for dynamic attention
-        freq_attention = layers.Lambda(
-            lambda x: tf.reduce_mean(x, axis=[1, 3], keepdims=True),  # Average over symbols and channels: (batch, 1, subcarriers, 1)
-            name=f"{name_prefix}_freq_attn_prep"
-        )(x)
-        # Squeeze to get (batch, subcarriers) for Dense layer
-        freq_attention = layers.Lambda(
-            lambda x: tf.squeeze(x, axis=[1, 3]),
-            name=f"{name_prefix}_freq_attn_squeeze"
-        )(freq_attention)
-        # Apply Dense to learn per-subcarrier attention weights
-        num_subcarriers = freq_attention.shape[-1] if freq_attention.shape[-1] is not None else 16  # After pooling
-        freq_attention = layers.Dense(num_subcarriers, activation='sigmoid',
-                                     name=f"{name_prefix}_freq_attn_dense")(freq_attention)
-        # Reshape back to (batch, 1, subcarriers, 1) for broadcasting
-        freq_attention = layers.Reshape((1, -1, 1), name=f"{name_prefix}_freq_attn_reshape")(freq_attention)
-        x = layers.Multiply(name=f"{name_prefix}_freq_attn_mult")([x, freq_attention])
+        # 🔧 ABLATION: Attention mechanism (can be disabled)
+        if self.use_attention:
+            # 🔧 TEST 8: Enhanced attention for subcarrier pattern detection
+            # This helps focus on frequencies where covert injection occurs (24-39)
+            # Use channel-wise attention to emphasize important subcarriers
+            attention_conv = layers.Conv2D(1, (1, 1), activation='sigmoid', 
+                                           name=f"{name_prefix}_attention")(x)
+            x = layers.Multiply(name=f"{name_prefix}_attn_mult")([x, attention_conv])
+            
+            # 🔧 TEST 8: Add frequency-domain attention (focus on subcarriers 24-39)
+            # Compute attention weights per subcarrier (frequency dimension)
+            # This helps the model focus on the target frequency band
+            # Get current shape for dynamic attention
+            freq_attention = layers.Lambda(
+                lambda x: tf.reduce_mean(x, axis=[1, 3], keepdims=True),  # Average over symbols and channels: (batch, 1, subcarriers, 1)
+                name=f"{name_prefix}_freq_attn_prep"
+            )(x)
+            # Squeeze to get (batch, subcarriers) for Dense layer
+            freq_attention = layers.Lambda(
+                lambda x: tf.squeeze(x, axis=[1, 3]),
+                name=f"{name_prefix}_freq_attn_squeeze"
+            )(freq_attention)
+            # Apply Dense to learn per-subcarrier attention weights
+            num_subcarriers = freq_attention.shape[-1] if freq_attention.shape[-1] is not None else 16  # After pooling
+            freq_attention = layers.Dense(num_subcarriers, activation='sigmoid',
+                                         name=f"{name_prefix}_freq_attn_dense")(freq_attention)
+            # Reshape back to (batch, 1, subcarriers, 1) for broadcasting
+            freq_attention = layers.Reshape((1, -1, 1), name=f"{name_prefix}_freq_attn_reshape")(freq_attention)
+            x = layers.Multiply(name=f"{name_prefix}_freq_attn_mult")([x, freq_attention])
         
         # 🔧 OPTIMIZATION: Add one more conv block for deeper pattern learning
         x = layers.Conv2D(256, (3, 3), padding='same',

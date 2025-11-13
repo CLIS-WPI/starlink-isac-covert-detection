@@ -1,0 +1,35 @@
+% Simplified Pseudocode for CNN-based Covert Channel Detection
+% Uses algorithm2e package
+
+\begin{algorithm}[t]
+\caption{CNN-Based Covert Channel Detection with 5-Fold Cross-Validation}
+\label{alg:detection}
+\SetAlgoLined
+\KwIn{Dataset $\mathcal{D}$ with $N=10,000$ samples, $K=5$ folds}
+\KwOut{Performance metrics: AUC, Precision, Recall, F1 (mean $\pm$ std)}
+
+\BlankLine
+Normalize grids: $X_i \leftarrow (X_i - \mu)/\sigma$ using training-only statistics\;
+Convert complex to magnitude: $X_i \leftarrow |X_i|$ if needed\;
+\BlankLine
+Split $\mathcal{D}$ into $K=5$ stratified folds\;
+\BlankLine
+\For{$k = 1$ \KwTo $K$}{
+    $\mathcal{D}_{\text{train}} \leftarrow \bigcup_{j \neq k} \mathcal{D}_j$ \tcp{80\% of data}
+    $\mathcal{D}_{\text{val}} \leftarrow \mathcal{D}_k$ \tcp{20\% of data}
+    \BlankLine
+    Initialize CNN model $f_\theta$\;
+    \For{epoch $= 1$ \KwTo $\text{max\_epochs}$}{
+        Train $f_\theta$ on $\mathcal{D}_{\text{train}}$ with Focal Loss\;
+        Evaluate on $\mathcal{D}_{\text{val}}$\;
+        \If{no improvement for $\text{patience}$ epochs}{\textbf{break}}
+    }
+    \BlankLine
+    Evaluate $f_\theta$ on $\mathcal{D}_{\text{val}}$: compute AUC, Precision, Recall, F1\;
+    Store metrics for fold $k$\;
+}
+\BlankLine
+Compute mean $\pm$ std across $K$ folds\;
+\Return{Aggregated metrics}
+\end{algorithm}
+

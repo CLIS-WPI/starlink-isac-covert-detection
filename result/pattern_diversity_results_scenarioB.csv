@@ -1,0 +1,5 @@
+pattern_type,auc_mean,auc_std,power_diff
+fixed,0.919,0.000,0.334
+random_sparse,0.888,0.000,0.196
+hopping,0.798,0.000,0.052
+phase_coded,0.897,0.000,0.298
