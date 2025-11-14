@@ -9,43 +9,46 @@ from pathlib import Path
 # Add workspace to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from generate_dataset_parallel import main as generate_dataset_main
+# Note: We use subprocess to call generate_dataset_parallel.py
+# because main() doesn't accept arguments directly
 
 
 @pytest.mark.e2e
 @pytest.mark.slow
 def test_scenario_a_generation(clean_test_env):
     """Test Scenario A: Single-hop dataset generation."""
-    import argparse
-    
-    # Create mock args for generate_dataset_parallel
-    args = [
-        '--scenario', 'sat',
-        '--total-samples', '50',
-        '--snr-list', '15,20',
-        '--covert-amp-list', '0.5',
-        '--samples-per-config', '12',
-        '--output-dir', str(clean_test_env / 'dataset'),
-    ]
-    
-    # Parse args
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--scenario', type=str, required=True)
-    parser.add_argument('--total-samples', type=int, required=True)
-    parser.add_argument('--snr-list', type=str, required=True)
-    parser.add_argument('--covert-amp-list', type=str, required=True)
-    parser.add_argument('--samples-per-config', type=int, required=True)
-    parser.add_argument('--output-dir', type=str, default='dataset')
-    
-    parsed_args = parser.parse_args(args)
-    
-    # Generate dataset
+    # Generate dataset using subprocess
+    import subprocess
     try:
-        generate_dataset_main([arg for arg in args if arg.startswith('--')])
+        workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        cmd = [
+            'python3', 'generate_dataset_parallel.py',
+            '--scenario', 'sat',
+            '--total-samples', '50',
+            '--snr-list', '15,20',
+            '--covert-amp-list', '0.5',
+            '--samples-per-config', '12',
+        ]
         
-        # Check if dataset was generated
-        dataset_dir = Path(parsed_args.output_dir)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=workspace_root
+        )
+        
+        if result.returncode != 0:
+            pytest.fail(f"Dataset generation failed: {result.stderr[:500]}")
+        
+        # Check if dataset was generated (in default dataset directory)
+        dataset_dir = Path(workspace_root) / 'dataset'
         dataset_files = list(dataset_dir.glob('dataset_scenario_a_*.pkl'))
+        
+        # Also check test env directory
+        if len(dataset_files) == 0:
+            test_dataset_dir = Path(clean_test_env / 'dataset')
+            dataset_files = list(test_dataset_dir.glob('dataset_scenario_a_*.pkl'))
         
         assert len(dataset_files) > 0, "No Scenario A dataset files found"
         
@@ -54,12 +57,20 @@ def test_scenario_a_generation(clean_test_env):
         with open(dataset_files[0], 'rb') as f:
             dataset = pickle.load(f)
         
-        assert 'data' in dataset, "Dataset missing 'data' key"
+        # Dataset structure: rx_grids, labels, meta (not 'data')
+        assert 'rx_grids' in dataset or 'data' in dataset, "Dataset missing 'rx_grids' or 'data' key"
+        assert 'labels' in dataset, "Dataset missing 'labels' key"
         assert 'meta' in dataset, "Dataset missing 'meta' key"
-        assert len(dataset['data']) > 0, "Dataset is empty"
+        
+        # Check data exists
+        if 'rx_grids' in dataset:
+            assert len(dataset['rx_grids']) > 0, "Dataset is empty"
+        elif 'data' in dataset:
+            assert len(dataset['data']) > 0, "Dataset is empty"
         
         print(f"✅ Scenario A dataset generated: {dataset_files[0].name}")
-        print(f"   Samples: {len(dataset['data'])}")
+        num_samples = len(dataset.get('rx_grids', dataset.get('data', [])))
+        print(f"   Samples: {num_samples}")
         
     except Exception as e:
         pytest.fail(f"Scenario A generation failed: {e}")

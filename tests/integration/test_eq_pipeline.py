@@ -46,6 +46,24 @@ def test_eq_pipeline_with_injection(mock_resource_grid, sample_ofdm_grid):
     
     # Compute pattern preservation
     target_subcarriers = np.array(injection_info['selected_subcarriers'])
+    
+    # Ensure proper shape for compute_pattern_preservation
+    # It expects (symbols, subcarriers) shape
+    if tx_grid.ndim == 3:
+        tx_grid = tx_grid[0]  # Take first sample if batch dimension exists
+    if rx_grid.ndim == 3:
+        rx_grid = rx_grid[0]
+    if x_eq.ndim == 3:
+        x_eq = x_eq[0]
+    
+    # Ensure 2D shape
+    if tx_grid.ndim == 1:
+        tx_grid = tx_grid.reshape(1, -1)
+    if rx_grid.ndim == 1:
+        rx_grid = rx_grid.reshape(1, -1)
+    if x_eq.ndim == 1:
+        x_eq = x_eq.reshape(1, -1)
+    
     metrics = compute_pattern_preservation(
         tx_grid,
         rx_grid,

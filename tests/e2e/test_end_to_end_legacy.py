@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
 """
 End-to-End Pipeline Test
 Tests both Scenario A (single-hop) and Scenario B (dual-hop) with all pattern types
 """
 
+import pytest
 import sys
 import os
 import pickle
@@ -11,13 +11,15 @@ import numpy as np
 from pathlib import Path
 
 # Add workspace to path
-sys.path.insert(0, '/workspace')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from core.dataset_generator_phase1 import generate_dataset_phase1
 from core.isac_system import ISACSystem
 from core.csi_estimation import compute_pattern_preservation, mmse_equalize
 
 
+@pytest.mark.e2e
+@pytest.mark.slow
 def test_scenario_a(num_samples=50):
     """Test Scenario A: Single-hop (downlink only)."""
     print("="*80)
@@ -43,6 +45,8 @@ def test_scenario_a(num_samples=50):
     }
 
 
+@pytest.mark.e2e
+@pytest.mark.slow
 def test_scenario_b(num_samples=100):
     """Test Scenario B: Dual-hop (uplink-relay-downlink) with all patterns."""
     print("\n" + "="*80)
@@ -135,15 +139,19 @@ def test_scenario_b(num_samples=100):
     }
 
 
-def test_eq_performance_comparison(scenario_b_results):
+@pytest.mark.e2e
+@pytest.mark.slow
+def test_eq_performance_comparison():
     """Compare EQ performance between patterns."""
     print("\n" + "="*80)
     print("📊 EQ Performance Comparison")
     print("="*80)
     
+    # Run test_scenario_b to get results
+    scenario_b_results = test_scenario_b(num_samples=50)
+    
     if 'pattern_results' not in scenario_b_results:
-        print("   ⚠️  No pattern results to compare")
-        return
+        pytest.skip("No pattern results to compare")
     
     results = scenario_b_results['pattern_results']
     

@@ -62,7 +62,9 @@ def test_scenario_b_pattern_generation(clean_test_env, pattern_config):
         with open(latest, 'rb') as f:
             dataset = pickle.load(f)
         
-        assert 'data' in dataset, "Dataset missing 'data' key"
+        # Dataset structure: rx_grids, labels, meta (not 'data')
+        assert 'rx_grids' in dataset or 'data' in dataset, "Dataset missing 'rx_grids' or 'data' key"
+        assert 'labels' in dataset, "Dataset missing 'labels' key"
         assert 'meta' in dataset, "Dataset missing 'meta' key"
         
         # Verify injection_info
